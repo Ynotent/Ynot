@@ -103,6 +103,7 @@ public:
     void process(float* left, float* right, int frames);
     void seek(int64_t frame);
     int64_t position() const { return pos_; }
+    int maxBlock() const { return opts_.maxBlock; }
     const std::vector<EngineIssue>& issues() const { return issues_; }
 
 private:

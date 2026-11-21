@@ -1,6 +1,9 @@
 # ADR-0002: UI toolkit and plugin hosting framework
 
-**Status:** Proposed. **Needs an owner decision** (licensing and budget).
+**Status:** Accepted (2026-11-21). The owner approved JUCE.
+
+**Follow-up for the owner:** get a JUCE license that fits the product (commercial for a
+closed-source release) before the first public build. Development can proceed now.
 
 ## Context
 The shells need four things:
@@ -23,10 +26,10 @@ The shells need four things:
   - iOS/Android share sheets, document pickers and haptics;
   - StoreKit and Play Billing.
 
-### Owner decisions required before M1
-1. **JUCE license.** JUCE is dual-licensed (AGPLv3 or commercial). A closed-source commercial
+### Owner decisions
+1. **JUCE license** (decided: use JUCE). JUCE is dual-licensed (AGPLv3 or commercial). A closed-source commercial
    app needs a paid JUCE license. If that's not acceptable, the fallback is below.
-2. **Mac App Store distribution.** Sandboxed apps have restrictions on hosting AUv2 and VST3
+2. **Mac App Store distribution** (still open; the recommendation below stands). Sandboxed apps have restrictions on hosting AUv2 and VST3
    plugins. The recommendation is to ship the pro macOS DAW as a direct download (notarized)
    first, and to treat a Mac App Store build as an optional later edition limited to AUv3.
 
@@ -42,3 +45,14 @@ The shells need four things:
 ## Explicitly rejected
 - **Four fully native UIs** (SwiftUI, AppKit, WinUI, Compose). That would mean four separate
   UI codebases, which contradicts the single-codebase requirement and makes visual drift likely.
+
+## Implementation notes
+- Pinned version: JUCE 8.0.4, fetched by CMake (`YNOT_BUILD_APP=ON`) or supplied with
+  `-DYNOT_JUCE_DIR=...`.
+- The shared JUCE app lives in `app/`. JUCE modules are used **only** in `app/`, never in
+  `core/` (ADR-0001 still holds).
+- macOS, Windows, iOS and Linux (dev host) build with JUCE's CMake API. JUCE's CMake API does
+  not target Android, so the Android shell (M5) will use a Gradle project with the NDK that
+  compiles the same `app/` sources.
+- ASIO needs Steinberg's ASIO SDK, which is a separate download under its own license. Pass
+  `-DYNOT_ASIO_SDK_DIR=...` to enable it. Without it, Windows builds use WASAPI.

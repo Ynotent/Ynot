@@ -10,3 +10,6 @@ exposed to Kotlin through JNI):
   feature flag while it is evaluated. VST3, AU and AUv3 do not exist on Android.
 - Touch-first UI: Compact layout on phones and Expanded on tablets, with 48 dp targets.
 - Google Play Billing and Android Keystore for tokens.
+
+> In code, the audio and plugin pieces above are `app/src/JuceAudioDevice` and
+> `app/src/JucePluginHost`, shared by all platforms and configured for each by JUCE.

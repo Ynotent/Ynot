@@ -14,8 +14,9 @@ one account and one project format, not four separate apps.
 |---|---|
 | `core/` | **`ynot_core`**, the portable C++20 library shared by every platform: project model, universal `.ynot` format, audio engine, compatibility and freeze, real-time collaboration, responsive layout rules, entitlements and AI gating. |
 | `core/tests/` | Unit tests (31), dependency-free |
+| `app/` | **The Ynot app**: one JUCE application for all four platforms (audio devices, VST3/AU/AUv3 hosting, responsive UI). Started in M1; dev-host builds only so far. |
 | `tools/ynot-cli/` | `ynot` CLI: create, inspect, compatibility-check and render projects |
-| `apps/{macos,windows,ios,android}/` | Plans for each platform's native shell (not built yet) |
+| `apps/{macos,windows,ios,android}/` | Platform-specific notes (packaging, store, test plans) |
 | `design/tokens.json` | Shared visual identity (colors, type, spacing, breakpoints) |
 | `docs/` | Architecture, format spec, sync/collaboration, billing, platform plans, ADRs, roadmap |
 
@@ -27,6 +28,13 @@ Requires CMake 3.22 or later and a C++20 compiler (GCC 11+, Clang 14+, MSVC 2022
 cmake -S . -B build
 cmake --build build -j
 ctest --test-dir build --output-on-failure
+```
+
+To also build the app (fetches JUCE 8.0.4; on Linux it needs the ALSA/X11/freetype dev packages listed in CI):
+
+```sh
+cmake -S . -B build -DYNOT_BUILD_APP=ON
+cmake --build build -j
 ```
 
 Try the cross-device compatibility check:

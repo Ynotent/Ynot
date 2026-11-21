@@ -4,16 +4,20 @@ All four platforms are part of the architecture from the start. They are deliver
 milestones, and **a platform is only called "supported" after native builds pass CI *and* the
 real-device test matrix for that milestone has been completed and signed off.**
 
-## Current status (Stage 17)
+## Current status (Stage 17, plus M1 started)
 
 | Platform | Status | What exists |
 |---|---|---|
-| macOS | **Planned** | Shared core; CI job compiles and tests the core on a macOS runner* |
-| Windows | **Planned** | Shared core; CI job compiles and tests the core with MSVC* |
-| iOS / iPadOS | **Planned** | Shared core; CI job cross-compiles the core for iOS* |
+| macOS | **Planned** (M1 in progress) | Shared core + JUCE app shell (CoreAudio, AU/VST3 hosting) defined; CI build job defined* |
+| Windows | **Planned** | Shared core + the same JUCE app (WASAPI, ASIO with SDK, VST3) defined; CI build job defined* |
+| iOS / iPadOS | **Planned** | Shared core + the same JUCE app; unsigned simulator CI build job defined* |
 | Android | **Planned** | Shared core; CI job cross-compiles the core with the NDK* |
 
-\* Verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 31/31
+\* The JUCE app (`app/`) has been built and run only on the Linux dev host: 9/9 adapter tests
+and the headless smoke test pass, and the UI was rendered at phone, tablet and desktop sizes.
+Nothing has been built for macOS, Windows or iOS yet.
+
+Core: verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 31/31
 tests pass. The macOS, Windows, iOS and Android CI jobs are defined in
 `.github/workflows/ci.yml` but **have not run yet**. Once they pass, a platform moves to
 `core-compiles`. None of these statuses means the app is usable on that platform.
@@ -32,9 +36,18 @@ was passed if it wasn't.
 - Responsive layout rules, entitlements, AI gating.
 - **Gate:** core tests are green on Linux ✅; the four-platform CI matrix is green ⏳.
 
-### M1: macOS alpha (first native shell)
-- Resolve ADR-0002. Build the macOS shell with CoreAudio `AudioDevice` and
-  AU/AUv3/VST3 `PluginHost` (out of process).
+### M1: macOS alpha (first native shell), in progress
+Done so far (built and tested on the Linux dev host only):
+- ADR-0002 resolved: JUCE 8.0.4.
+- `JuceAudioDevice` (one `AudioDevice` for CoreAudio, ASIO/WASAPI, iOS Audio, Oboe).
+- `JucePluginHost` (VST3/AU/AUv3) with machine-independent plugin ids and portable base64 state.
+- `Session`: live engine swap with no locks on the audio thread; freeze and "Prepare for
+  iPhone & Android" from the UI.
+- Responsive main window driven by `decideLayout()` and `design/tokens.json`.
+
+Still to do:
+- Build and run on a real Mac; out-of-process plugin hosting and scanning; plugin editor windows.
+- Recording; timeline editing (clips, MIDI, automation).
 - Features: record, edit, arrange, mix, freeze, open and save `.ynot`.
 - Replace linear resampling with windowed-sinc. Add a recording latency calibration tool.
 - **Real-device gate:**

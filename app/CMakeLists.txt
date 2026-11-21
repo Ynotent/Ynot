@@ -1,0 +1,64 @@
+# Ynot app: one JUCE application for macOS, Windows, iOS (and Linux as a dev host).
+# Android (M5) compiles these same sources from a Gradle/NDK project, because
+# JUCE's CMake API does not target Android.
+
+juce_add_binary_data(ynot_app_assets
+    HEADER_NAME BinaryData.h
+    NAMESPACE BinaryData
+    SOURCES ${CMAKE_SOURCE_DIR}/design/tokens.json)
+
+set(YNOT_APP_SOURCES
+    src/JuceAudioDevice.cpp
+    src/JucePluginHost.cpp
+    src/Session.cpp
+    src/MainComponent.cpp)
+
+juce_add_gui_app(YnotApp
+    PRODUCT_NAME "Ynot"
+    COMPANY_NAME "Ynot"
+    BUNDLE_ID "com.ynot.app"
+    VERSION ${PROJECT_VERSION}
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Ynot records audio from your microphone or audio interface."
+    BACKGROUND_AUDIO_ENABLED TRUE
+    IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+    IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+    DOCUMENT_EXTENSIONS ynot)
+
+target_sources(YnotApp PRIVATE src/Main.cpp ${YNOT_APP_SOURCES})
+
+set(YNOT_JUCE_DEFS
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:YnotApp,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:YnotApp,JUCE_VERSION>"
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_AU=1
+    JUCE_USE_ANDROID_OBOE=1
+    JUCE_DISPLAY_SPLASH_SCREEN=0)
+
+if(YNOT_ASIO_SDK_DIR)
+    list(APPEND YNOT_JUCE_DEFS JUCE_ASIO=1)
+    set(YNOT_ASIO_INCLUDE "${YNOT_ASIO_SDK_DIR}/common")
+endif()
+
+set(YNOT_JUCE_MODULES
+    juce::juce_audio_utils
+    juce::juce_audio_processors
+    juce::juce_audio_devices
+    juce::juce_gui_extra)
+
+target_compile_definitions(YnotApp PRIVATE ${YNOT_JUCE_DEFS})
+target_include_directories(YnotApp PRIVATE ${YNOT_ASIO_INCLUDE})
+target_link_libraries(YnotApp PRIVATE
+    ynot_core ynot_app_assets ${YNOT_JUCE_MODULES}
+    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+if(YNOT_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    juce_add_console_app(YnotAppTests PRODUCT_NAME "YnotAppTests")
+    target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp)
+    target_compile_definitions(YnotAppTests PRIVATE ${YNOT_JUCE_DEFS})
+    target_link_libraries(YnotAppTests PRIVATE
+        ynot_core juce::juce_audio_processors juce::juce_gui_basics juce::juce_recommended_config_flags)
+    add_test(NAME ynot_app_tests COMMAND YnotAppTests)
+endif()
