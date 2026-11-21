@@ -65,7 +65,8 @@ target_link_libraries(YnotApp PRIVATE
 if(YNOT_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     juce_add_console_app(YnotAppTests PRODUCT_NAME "YnotAppTests")
     target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp src/JuceAudioDevice.cpp src/PluginSandbox.cpp src/AudioImporter.cpp)
-    target_compile_definitions(YnotAppTests PRIVATE ${YNOT_JUCE_DEFS})
+    target_compile_definitions(YnotAppTests PRIVATE ${YNOT_JUCE_DEFS}
+        YNOT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     # Same JUCE modules as the app: plugin hosting on macOS needs frameworks (e.g. CoreAudioKit
     # for AU generic views) that only the full module set pulls in.
     target_link_libraries(YnotAppTests PRIVATE

@@ -184,6 +184,13 @@ Done so far (built and tested on the Linux dev host only):
     extensions, so the MP3 decoder can't "decode" MP4/WMV containers into garbage.
   - Test files (`app/tests/fixtures`, 0.5 s tones in 8 formats, MP4/WMV with video tracks)
     are decoded by the smoke test on every CI platform.
+  - WAV in all common flavours: 8/16/24/32-bit integer, 32-bit float, 44.1–192 kHz, mono,
+    surround and RF64 (long recordings). Each is checked for exact length, sample rate and
+    level against 8 fixture files.
+  - Surround (5.1/7.1) is folded down to stereo: centre and surrounds at −3 dB, LFE left out.
+    The channel map comes from the file when present.
+  - Found while testing: the first version kept only front-left/right, so a 5.1 file with
+    dialogue in the centre imported as silence. Fixed.
   - Verified on Linux: WAV, FLAC, Ogg, MP3 decode correctly; MP4/M4A/WMV/WMA give the right
     reasons; random bytes in 5 formats are refused. MP4/M4A on macOS and WMA/WMV on Windows
     are verified by CI.

@@ -15,6 +15,40 @@ juce::AudioFormatManager& formats() {
 const juce::StringArray kExtensions{"wav", "wave", "aif", "aiff", "flac", "ogg", "mp3", "m4a", "mp4",
                                     "aac", "mov", "caf", "wma", "wmv", "asf"};
 
+// Per-channel (left, right) gains for folding any channel layout down to stereo.
+std::vector<std::pair<float, float>> downmixWeights(juce::AudioFormatReader& reader, int n) {
+    constexpr float kMinus3dB = 0.70710678f;
+    std::vector<std::pair<float, float>> w(static_cast<size_t>(n), {0.f, 0.f});
+    if (n <= 2) {
+        if (n >= 1) w[0] = {1.f, 0.f};
+        if (n == 2) w[1] = {0.f, 1.f};
+        return w;
+    }
+    auto layout = reader.getChannelLayout();
+    if (layout.size() != n) {
+        // No channel map in the file: assume the standard SMPTE/WAV order
+        // FL FR FC LFE BL BR [SL SR]; anything beyond is spread evenly.
+        layout = n == 6 ? juce::AudioChannelSet::create5point1() : n == 8 ? juce::AudioChannelSet::create7point1()
+                                                                            : juce::AudioChannelSet::discreteChannels(n);
+    }
+    for (int c = 0; c < n; ++c) {
+        const auto type = layout.getTypeOfChannel(c);
+        const auto name = juce::AudioChannelSet::getChannelTypeName(type);
+        auto& g = w[static_cast<size_t>(c)];
+        if (type == juce::AudioChannelSet::left) g = {1.f, 0.f};
+        else if (type == juce::AudioChannelSet::right) g = {0.f, 1.f};
+        else if (name.containsIgnoreCase("LFE")) g = {0.f, 0.f};
+        else if (name.containsIgnoreCase("Centre") || name.containsIgnoreCase("Center")) {
+            if (name.containsIgnoreCase("Left")) g = {kMinus3dB, 0.f};
+            else if (name.containsIgnoreCase("Right")) g = {0.f, kMinus3dB};
+            else g = {kMinus3dB, kMinus3dB};
+        } else if (name.containsIgnoreCase("Left")) g = {kMinus3dB, 0.f};
+        else if (name.containsIgnoreCase("Right")) g = {0.f, kMinus3dB};
+        else g = {0.5f, 0.5f};  // unlabelled/discrete: spread evenly
+    }
+    return w;
+}
+
 juce::String unsupportedReason(const juce::File& f) {
     const auto ext = f.getFileExtension().toLowerCase().trimCharactersAtStart(".");
 #if JUCE_MAC || JUCE_IOS
@@ -80,19 +114,35 @@ DecodedAudio decodeAudioFile(const juce::File& file) {
         out.error = "\"" + file.getFileName() + "\" is longer than an hour; split it before importing.";
         return out;
     }
-    const int channels = reader->numChannels >= 2 ? 2 : 1;  // surround: keep the front pair
+    const int inChannels = static_cast<int>(reader->numChannels);
+    const int channels = inChannels >= 2 ? 2 : 1;
     const auto frames = static_cast<int>(reader->lengthInSamples);
-    juce::AudioBuffer<float> buf(static_cast<int>(std::max(2u, reader->numChannels)), frames);
+    juce::AudioBuffer<float> buf(std::max(2, inChannels), frames);
     if (!reader->read(&buf, 0, frames, 0, true, true)) {
         out.error = "Reading \"" + file.getFileName() + "\" failed partway through.";
         return out;
     }
+    // Stereo/mono pass straight through. Surround is folded down to stereo with the usual
+    // coefficients: centre and surrounds at -3 dB into their side(s), LFE left out — so a
+    // film's dialogue (centre channel) isn't lost.
+    const auto weights = downmixWeights(*reader, inChannels);
     out.audio.sampleRate = reader->sampleRate;
     out.audio.channels = channels;
     out.audio.samples.resize(static_cast<size_t>(frames) * static_cast<size_t>(channels));
-    for (int i = 0; i < frames; ++i)
-        for (int c = 0; c < channels; ++c)
-            out.audio.samples[static_cast<size_t>(i * channels + c)] = buf.getSample(c, i);
+    for (int i = 0; i < frames; ++i) {
+        if (channels == 1) {
+            out.audio.samples[static_cast<size_t>(i)] = buf.getSample(0, i);
+            continue;
+        }
+        float l = 0, r = 0;
+        for (int c = 0; c < inChannels; ++c) {
+            const float v = buf.getSample(c, i);
+            l += v * weights[static_cast<size_t>(c)].first;
+            r += v * weights[static_cast<size_t>(c)].second;
+        }
+        out.audio.samples[static_cast<size_t>(i * 2)] = l;
+        out.audio.samples[static_cast<size_t>(i * 2 + 1)] = r;
+    }
     out.formatName = reader->getFormatName();
     out.ok = true;
     return out;

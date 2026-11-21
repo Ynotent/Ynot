@@ -122,6 +122,38 @@ int main() {
                "real speakers and interfaces are not flagged");
     }
 
+    {   // WAV in all its common flavours imports correctly (rate kept, exact length, level).
+        struct Case { const char* file; double rate; int channels; };
+        const Case cases[] = {{"wav-8bit-mono.wav", 44100, 1},     {"wav-16bit-48k.wav", 48000, 2},
+                              {"wav-24bit-96k.wav", 96000, 2},     {"wav-24bit-192k.wav", 192000, 2},
+                              {"wav-32bit-int.wav", 44100, 2},     {"wav-32bit-float.wav", 48000, 2},
+                              {"wav-5.1-surround.wav", 48000, 2},  // surround -> front pair
+                              {"wav-rf64.wav", 48000, 2}};
+        const juce::File dir(YNOT_FIXTURE_DIR);
+        bool all = true;
+        for (const auto& c : cases) {
+            auto d = decodeAudioFile(dir.getChildFile(c.file));
+            float peak = 0;
+            for (float v : d.audio.samples) peak = std::max(peak, std::abs(v));
+            const auto expectedFrames = static_cast<int64_t>(c.rate * 0.1);
+            // The fixtures' tone: mono peaks at 1/8 full scale; ffmpeg made the stereo files at -3 dB
+            // (0.088, measured with ffmpeg astats); the 5.1 file has the tone only in the centre
+            // channel, which the downmix puts in both sides at -3 dB (also 0.088).
+            const float want = c.channels == 1 ? 0.125f : 0.0884f;
+            const bool good = d.ok && std::abs(d.audio.sampleRate - c.rate) < 1 && d.audio.channels == c.channels &&
+                              d.audio.frames() == expectedFrames && std::abs(peak - want) < 0.004f;
+            std::cout << "  info " << c.file << ": "
+                      << (good ? juce::String("ok (") + juce::String(d.audio.frames()) + " frames, peak " +
+                                     juce::String(peak, 3) + ")"
+                               : "FAILED " + d.error + " rate " + juce::String(d.audio.sampleRate) + " ch " +
+                                     juce::String(d.audio.channels) + " frames " + juce::String(d.audio.frames()) +
+                                     " peak " + juce::String(peak, 3))
+                      << "\n";
+            all &= good;
+        }
+        expect(all, "WAV: 8/16/24/32-bit, float, 44.1-192 kHz, mono, 5.1 and RF64 all import correctly");
+    }
+
     {   // Damaged files must be refused, never imported as noise.
         juce::Random rng(1234);
         for (const char* ext : {".mp3", ".wav", ".flac", ".m4a", ".wmv"}) {
