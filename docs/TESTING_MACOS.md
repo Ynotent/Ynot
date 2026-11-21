@@ -41,7 +41,7 @@ Use **headphones** for steps 5 and 6. Speakers plus the built-in mic will feed b
 | 8c | **Shift+drag** in the ruler over bar 2, arm a track, press **Record**, play through bars 1–3, **Stop Rec**. | Recording starts a bar early (pre-roll) but only bar 2 is replaced; bars 1 and 3 keep the old material. |
 | 8d | **4/4 → 6/8**, turn on **Click** and play. | The ruler shows 6 beats per bar; the click is on every eighth with an accent on beat 1. |
 | 9 | Drag a clip; drag its edges; double-click to split; select and press Delete; then **Cmd+Z** a few times. | Everything works, and undo steps back through it. Also try a trackpad pinch to zoom and a two-finger swipe to scroll. |
-| 10 | **Scan Plugins**, if you have third-party AU/VST3 plugins installed. | It finishes. *If the app crashes here, note which plugin was scanning; out-of-process scanning is a known M1 TODO.* |
+| 10 | **Scan Plugins**, if you have third-party AU/VST3 plugins installed. | The button counts "Scanning 12/140..." while the window stays usable, then a summary lists how many were found and any that failed. Ynot should **never** crash here: failing plugins are caught in a helper process. Note the counts and any failures listed. |
 | 11 | **Save**, quit, relaunch and **Open** the project (`~/Documents/Ynot/Demo Song.ynot`). | Everything comes back exactly as saved. |
 | 12 | Change the **Open this project on** menu between iPhone/iPad, Android and Windows. | The report explains which plugins won't work where, and what to do. |
 

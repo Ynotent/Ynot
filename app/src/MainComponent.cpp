@@ -476,14 +476,44 @@ void MainComponent::showAudioSettings() {
 }
 
 void MainComponent::scanPlugins() {
+    if (scanning_) return;
+    scanning_ = true;
     scanButton_.setEnabled(false);
     scanButton_.setButtonText("Scanning...");
-    // Runs on the message thread for M1-alpha; an out-of-process scanner replaces this so a
-    // crashing plugin can't take the app down.
-    host_.scanDefaultLocations();
-    scanButton_.setButtonText("Scan Plugins");
-    scanButton_.setEnabled(true);
-    session_.reload();  // newly found plugins become live (not an undoable edit)
+    // Each plugin is inspected in a helper process (see JucePluginHost::scanOutOfProcess), on a
+    // background thread so the window stays responsive.
+    juce::Component::SafePointer<MainComponent> safe(this);
+    const auto exe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+    juce::Thread::launch([safe, exe, host = &host_] {
+        auto report = host->scanOutOfProcess(exe, [safe](int done, int total, const juce::String& name) {
+            juce::MessageManager::callAsync([safe, done, total, name] {
+                if (safe) safe->scanButton_.setButtonText("Scanning " + juce::String(done + 1 > total ? total : done + 1) +
+                                                          "/" + juce::String(total));
+                juce::ignoreUnused(name);
+            });
+        });
+        juce::MessageManager::callAsync([safe, report] {
+            if (!safe) return;
+            safe->scanning_ = false;
+            safe->host_.saveCache(pluginCacheFile());
+            safe->scanButton_.setButtonText("Scan Plugins");
+            safe->scanButton_.setEnabled(true);
+            safe->session_.reload();  // newly found plugins become live (not an undoable edit)
+            juce::String msg;
+            msg << "Found " << report.found << " new plugin" << (report.found == 1 ? "" : "s");
+            if (report.alreadyKnown > 0) msg << " (" << report.alreadyKnown << " already known)";
+            msg << ".";
+            if (!report.failed.empty()) {
+                msg << "\n\n" << static_cast<int>(report.failed.size())
+                    << " couldn't be scanned and will be skipped (Ynot kept running):\n";
+                for (size_t i = 0; i < report.failed.size() && i < 12; ++i) msg << "  - " << report.failed[i] << "\n";
+                if (report.failed.size() > 12) msg << "  ...and " << static_cast<int>(report.failed.size() - 12) << " more\n";
+            }
+            juce::AlertWindow::showMessageBoxAsync(report.failed.empty() ? juce::MessageBoxIconType::InfoIcon
+                                                                          : juce::MessageBoxIconType::WarningIcon,
+                                                   "Plugin scan", msg);
+        });
+    });
 }
 
 void MainComponent::prepareForMobile() {

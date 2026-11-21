@@ -52,9 +52,28 @@ public:
                                                 int maxBlock) override;
     bool isAvailable(const ynot::PluginInstance& p) const override;
 
-    // Scans the platform's default plugin folders. On desktop this is slow and
-    // runs off the audio thread; M1 moves it to an out-of-process scanner.
-    void scanDefaultLocations(std::function<void(const juce::String&)> progress = {});
+    // ---- Out-of-process plugin scanning ------------------------------------------------
+    // Each plugin file is inspected by a child process (this same executable started with
+    // --scan-one). A plugin that crashes or hangs only takes down the child: it's recorded
+    // as failed and skipped next time, and Ynot keeps running.
+    enum class ScanOutcome { Found, NoPlugin, Crashed, TimedOut };
+    struct ScanReport {
+        int found = 0;
+        int alreadyKnown = 0;
+        std::vector<std::string> failed;  // "file: reason"
+    };
+    ScanOutcome scanOneOutOfProcess(const juce::File& executable, const juce::String& formatName,
+                                    const juce::String& fileOrIdentifier, int timeoutMs, juce::String& detail);
+    // Thread-safe to call from a background thread; progress(done, total, current file).
+    ScanReport scanOutOfProcess(const juce::File& executable,
+                                std::function<void(int, int, const juce::String&)> progress = {},
+                                std::function<bool()> shouldCancel = {});
+    // Child-process entry point: scans one file and writes descriptions to an XML file.
+    static int runScanChild(const juce::StringArray& args);
+
+    // Remember scan results (and failures) between launches. Device-local, never synced.
+    void loadCache(const juce::File& f);
+    void saveCache(const juce::File& f) const;
     void addKnownPlugin(const juce::PluginDescription& d) { known_.addType(d); }
     void addFormat(std::unique_ptr<juce::AudioPluginFormat> f) { formats_.addFormat(f.release()); }
 

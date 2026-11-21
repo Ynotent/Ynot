@@ -126,8 +126,19 @@ Done so far (built and tested on the Linux dev host only):
   - Found while testing: a pending playhead seek could override the pre-roll position, so
     engine rebuilds now discard stale seeks.
 
+- **Out-of-process plugin scanning:**
+  - Each plugin file is inspected by a helper process: Ynot's own executable started with
+    `--scan-one`.
+  - A plugin that crashes or hangs (60 s timeout) only kills the helper. It's reported in the
+    scan summary and skipped on later scans, and Ynot keeps running.
+  - Scans run on a background thread with progress shown on the button.
+  - Results are cached per machine, so launches don't rescan.
+  - The smoke test exercises the success, crash and hang paths with real child processes.
+
 Still to do:
-- Build and run on a real Mac; out-of-process plugin hosting and scanning; plugin editor windows.
+- Out-of-process plugin *processing* (a crashing plugin during playback still takes down the
+  app); plugin editor windows. Real-device plugin scan with the tester's AU/VST3 collection
+  (checklist step 10).
 - Loop/cycle recording with take lanes; count-in length choice (currently 1 bar).
 - MIDI recording from controllers onto instrument tracks.
 - Recording latency calibration tool (loopback test). Driver-reported latency is often wrong

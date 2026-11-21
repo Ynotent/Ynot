@@ -12,6 +12,8 @@
 
 namespace ynotapp {
 
+juce::File pluginCacheFile();  // device-local list of scanned plugins (Main.cpp)
+
 class MainComponent : public juce::Component, private juce::Timer {
 public:
     MainComponent(Session& session, JucePluginHost& host);
@@ -94,6 +96,7 @@ private:
     juce::TextEditor compat_;
     juce::String compatText_;
     std::unique_ptr<juce::FileChooser> chooser_;
+    bool scanning_ = false;
 };
 
 }  // namespace ynotapp

@@ -104,19 +104,25 @@ private:
 
 // ---------------------------------------------------------------- host
 
-JucePluginHost::JucePluginHost() {
-    const auto platform = ynot::currentPlatform();
+namespace {
+// Pseudo-format used only by tests to exercise crash/hang/success paths of the child.
+constexpr const char* kTestFormat = "YnotScanTest";
+
 // VST3 hosting exists only on desktop; on iOS/Android JUCE declares the class without an
 // implementation, so it must not even be compiled there.
+void addDesktopFormats(juce::AudioPluginFormatManager& fm) {
+    const auto platform = ynot::currentPlatform();
 #if JUCE_PLUGINHOST_VST3 && (JUCE_MAC || JUCE_WINDOWS || JUCE_LINUX)
-    if (ynot::platformLoadsFormat(platform, ynot::PluginFormat::VST3))
-        formats_.addFormat(new juce::VST3PluginFormat());
+    if (ynot::platformLoadsFormat(platform, ynot::PluginFormat::VST3)) fm.addFormat(new juce::VST3PluginFormat());
 #endif
 #if JUCE_PLUGINHOST_AU && (JUCE_MAC || JUCE_IOS)
-    formats_.addFormat(new juce::AudioUnitPluginFormat());
+    fm.addFormat(new juce::AudioUnitPluginFormat());
 #endif
-    juce::ignoreUnused(platform);
+    juce::ignoreUnused(platform, fm);
 }
+}  // namespace
+
+JucePluginHost::JucePluginHost() { addDesktopFormats(formats_); }
 
 JucePluginHost::~JucePluginHost() = default;
 
@@ -160,14 +166,115 @@ std::unique_ptr<ynot::PluginProcessor> JucePluginHost::load(const ynot::PluginIn
     return std::make_unique<TrackedAdapter>(*this, p.id, std::move(inst), sr, maxBlock);
 }
 
-void JucePluginHost::scanDefaultLocations(std::function<void(const juce::String&)> progress) {
-    auto deadMansPedal = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("ynot-scan.txt");
-    for (auto* format : formats_.getFormats()) {
-        juce::PluginDirectoryScanner scanner(known_, *format, format->getDefaultLocationsToSearch(), true,
-                                             deadMansPedal);
-        juce::String name;
-        while (scanner.scanNextFile(true, name))
-            if (progress) progress(format->getName() + ": " + name);
+
+int JucePluginHost::runScanChild(const juce::StringArray& args) {
+    // args: --scan-one <format> <fileOrIdentifier> <outFile>
+    const int i = args.indexOf("--scan-one");
+    if (i < 0 || i + 3 >= args.size()) return 2;
+    const juce::String formatName = args[i + 1].unquoted(), id = args[i + 2].unquoted();
+    const juce::File out(args[i + 3].unquoted());
+    juce::XmlElement root("PLUGINS");
+    if (formatName == kTestFormat) {
+        if (id == "crash") std::abort();                         // simulates a plugin crashing the scanner
+        if (id == "hang") for (;;) juce::Thread::sleep(1000);    // simulates a plugin that never returns
+        juce::PluginDescription d;
+        d.name = "Scan Test Plugin";
+        d.pluginFormatName = kTestFormat;
+        d.fileOrIdentifier = id;
+        d.manufacturerName = "Ynot";
+        d.uniqueId = 7;
+        root.addChildElement(d.createXml().release());
+        return root.writeTo(out) ? 0 : 3;
+    }
+    juce::AudioPluginFormatManager fm;
+    addDesktopFormats(fm);
+    for (auto* f : fm.getFormats())
+        if (f->getName() == formatName) {
+            juce::OwnedArray<juce::PluginDescription> found;
+            f->findAllTypesForFile(found, id);
+            for (auto* d : found) root.addChildElement(d->createXml().release());
+            return root.writeTo(out) ? 0 : 3;
+        }
+    return 4;  // unknown format
+}
+
+JucePluginHost::ScanOutcome JucePluginHost::scanOneOutOfProcess(const juce::File& exe, const juce::String& formatName,
+                                                                const juce::String& id, int timeoutMs,
+                                                                juce::String& detail) {
+    auto out = juce::File::createTempFile(".xml");
+    juce::ChildProcess child;
+    juce::StringArray cmd{exe.getFullPathName(), "--scan-one", formatName, id, out.getFullPathName()};
+    if (!child.start(cmd, 0)) {
+        detail = "could not start the scanner";
+        return ScanOutcome::Crashed;
+    }
+    if (!child.waitForProcessToFinish(timeoutMs)) {
+        child.kill();
+        detail = "timed out after " + juce::String(timeoutMs / 1000) + " s";
+        out.deleteFile();
+        return ScanOutcome::TimedOut;
+    }
+    const auto code = child.getExitCode();
+    auto xml = juce::XmlDocument::parse(out);
+    out.deleteFile();
+    if (code != 0 || xml == nullptr) {
+        detail = "crashed while loading (exit " + juce::String(static_cast<int>(code)) + ")";
+        return ScanOutcome::Crashed;
+    }
+    int n = 0;
+    for (auto* e : xml->getChildIterator()) {
+        juce::PluginDescription d;
+        if (d.loadFromXml(*e)) {
+            known_.addType(d);
+            ++n;
+        }
+    }
+    return n > 0 ? ScanOutcome::Found : ScanOutcome::NoPlugin;
+}
+
+JucePluginHost::ScanReport JucePluginHost::scanOutOfProcess(const juce::File& exe,
+                                                            std::function<void(int, int, const juce::String&)> progress,
+                                                            std::function<bool()> shouldCancel) {
+    ScanReport report;
+    struct Item { juce::AudioPluginFormat* format; juce::String id; };
+    std::vector<Item> todo;
+    for (auto* f : formats_.getFormats())
+        for (auto& id : f->searchPathsForPlugins(f->getDefaultLocationsToSearch(), true, false)) {
+            if (known_.getBlacklistedFiles().contains(id)) continue;  // failed before: skip
+            bool knownAlready = false;
+            for (const auto& t : known_.getTypes()) knownAlready |= t.fileOrIdentifier == id;
+            if (knownAlready) { ++report.alreadyKnown; continue; }
+            todo.push_back({f, id});
+        }
+    for (size_t i = 0; i < todo.size(); ++i) {
+        if (shouldCancel && shouldCancel()) break;
+        const auto& item = todo[i];
+        const auto shortName = juce::File::createFileWithoutCheckingPath(item.id).getFileName();
+        if (progress) progress(static_cast<int>(i), static_cast<int>(todo.size()), shortName.isEmpty() ? item.id : shortName);
+        juce::String detail;
+        switch (scanOneOutOfProcess(exe, item.format->getName(), item.id, 60000, detail)) {
+            case ScanOutcome::Found: ++report.found; break;
+            case ScanOutcome::NoPlugin: break;
+            case ScanOutcome::Crashed:
+            case ScanOutcome::TimedOut:
+                known_.addToBlacklist(item.id);  // don't retry it on every scan
+                report.failed.push_back((shortName.isEmpty() ? item.id : shortName).toStdString() + ": " +
+                                        detail.toStdString());
+                break;
+        }
+    }
+    if (progress) progress(static_cast<int>(todo.size()), static_cast<int>(todo.size()), {});
+    return report;
+}
+
+void JucePluginHost::loadCache(const juce::File& f) {
+    if (auto xml = juce::XmlDocument::parse(f)) known_.recreateFromXml(*xml);
+}
+
+void JucePluginHost::saveCache(const juce::File& f) const {
+    if (auto xml = known_.createXml()) {
+        f.getParentDirectory().createDirectory();
+        xml->writeTo(f);
     }
 }
 

@@ -174,6 +174,25 @@ static int runSmokeTest(const juce::File& dir) {
                "old notes inside the range are replaced; bar 1 is untouched");
     }
 
+    {   // Out-of-process scanning: a crashing or hanging plugin only kills the helper.
+        const auto self = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+        juce::String detail;
+        using O = JucePluginHost::ScanOutcome;
+        expect(host.scanOneOutOfProcess(self, "YnotScanTest", "ok", 30000, detail) == O::Found,
+               "scanner helper reports a plugin");
+        expect(host.scanOneOutOfProcess(self, "YnotScanTest", "crash", 30000, detail) == O::Crashed,
+               "a plugin that crashes the scanner is caught; Ynot keeps running");
+        expect(host.scanOneOutOfProcess(self, "YnotScanTest", "hang", 3000, detail) == O::TimedOut,
+               "a plugin that hangs the scanner times out and is skipped");
+        auto cache = juce::File::createTempFile(".xml");
+        host.saveCache(cache);
+        JucePluginHost fresh;
+        fresh.loadCache(cache);
+        cache.deleteFile();
+        expect(fresh.knownPlugins().getNumTypes() == host.knownPlugins().getNumTypes(),
+               "scan results are remembered between launches");
+    }
+
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     expect(ynot::projectToJson(reopened) == ynot::projectToJson(session.project()), "save/reopen is lossless");
@@ -219,14 +238,31 @@ public:
     void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
 };
 
+juce::File pluginCacheFile() {
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Ynot").getChildFile("plugins.xml");
+}
+
 class YnotApplication : public juce::JUCEApplication {
 public:
     const juce::String getApplicationName() override { return "Ynot"; }
     const juce::String getApplicationVersion() override { return ynot::kCoreVersion; }
-    bool moreThanOneInstanceAllowed() override { return false; }
+    // The plugin-scan helper and test modes run alongside the real app.
+    bool moreThanOneInstanceAllowed() override {
+        const auto args = getCommandLineParameters();
+        return args.contains("--scan-one") || args.contains("--smoke-test") || args.contains("--screenshot");
+    }
 
     void initialise(const juce::String& commandLine) override {
         auto args = juce::StringArray::fromTokens(commandLine, true);
+        if (args.contains("--scan-one")) {  // plugin-scan helper process: no window, no audio
+#if JUCE_MAC
+            juce::Process::setDockIconVisible(false);
+#endif
+            setApplicationReturnValue(JucePluginHost::runScanChild(args));
+            quit();
+            return;
+        }
         if (args.contains("--smoke-test")) {
             auto dirArg = args[args.indexOf("--smoke-test") + 1].unquoted();
             auto dir = dirArg.isNotEmpty() ? juce::File(dirArg)
@@ -239,6 +275,7 @@ public:
             MainComponent::layoutPlatformOverride =
                 ynot::platformFromString(args[args.indexOf("--layout-as") + 1].toStdString());
         host_ = std::make_unique<JucePluginHost>();
+        host_->loadCache(pluginCacheFile());  // plugins scanned on a previous launch
         session_ = std::make_unique<Session>(*host_);
         if (args.contains("--open")) {
             try {
