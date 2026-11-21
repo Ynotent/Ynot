@@ -8,8 +8,8 @@
 # (brew install cmake). The first run downloads JUCE 8.0.4 (~100 MB) and takes ~5-10 minutes.
 set -u
 cd "$(dirname "$0")/.."
-# Find tools installed by Homebrew or pip even if the shell's PATH wasn't set up for them.
-for d in /opt/homebrew/bin /usr/local/bin "$HOME"/Library/Python/3.*/bin; do
+# Find CMake.app, Homebrew or pip tools even if the shell's PATH wasn't set up for them.
+for d in /Applications/CMake.app/Contents/bin /opt/homebrew/bin /usr/local/bin "$HOME"/Library/Python/3.*/bin; do
     [ -d "$d" ] && PATH="$PATH:$d"
 done
 export PATH
