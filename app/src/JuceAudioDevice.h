@@ -27,6 +27,7 @@ public:
     int outputLatencyFrames() const override;
 
     juce::AudioDeviceManager& manager() { return manager_; }
+    const juce::AudioDeviceManager& manager() const { return manager_; }
     std::string lastError() const { return lastError_; }
     double currentSampleRate() const;
     int currentBufferSize() const;

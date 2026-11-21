@@ -1,5 +1,6 @@
 #include "ynot/media.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <fstream>
@@ -46,26 +47,57 @@ void sha256Block(uint32_t h[8], const uint8_t* p) {
 }
 }  // namespace
 
-std::string sha256Hex(const void* data, size_t len) {
-    uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                     0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+Sha256::Sha256() : h_{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                     0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19} {}
+
+void Sha256::update(const void* data, size_t len) {
     const auto* p = static_cast<const uint8_t*>(data);
-    size_t full = len / 64;
-    for (size_t i = 0; i < full; ++i) sha256Block(h, p + i * 64);
-    uint8_t tail[128] = {};
-    size_t rem = len % 64;
-    if (rem) std::memcpy(tail, p + full * 64, rem);
-    tail[rem] = 0x80;
-    size_t tailLen = rem < 56 ? 64 : 128;
-    uint64_t bits = static_cast<uint64_t>(len) * 8;
-    for (int i = 0; i < 8; ++i) tail[tailLen - 1 - i] = static_cast<uint8_t>(bits >> (8 * i));
-    sha256Block(h, tail);
-    if (tailLen == 128) sha256Block(h, tail + 64);
+    total_ += len;
+    while (len > 0) {
+        size_t take = std::min(len, size_t(64) - bufLen_);
+        std::memcpy(buf_ + bufLen_, p, take);
+        bufLen_ += take;
+        p += take;
+        len -= take;
+        if (bufLen_ == 64) {
+            sha256Block(h_, buf_);
+            bufLen_ = 0;
+        }
+    }
+}
+
+std::string Sha256::finalHex() {
+    uint64_t bits = total_ * 8;
+    uint8_t pad = 0x80;
+    update(&pad, 1);
+    uint8_t zero = 0;
+    while (bufLen_ != 56) update(&zero, 1);
+    uint8_t len[8];
+    for (int i = 0; i < 8; ++i) len[i] = static_cast<uint8_t>(bits >> (8 * (7 - i)));
+    update(len, 8);
     static const char* hex = "0123456789abcdef";
     std::string out;
-    for (uint32_t v : h)
+    for (uint32_t v : h_)
         for (int s = 28; s >= 0; s -= 4) out += hex[(v >> s) & 0xF];
     return out;
+}
+
+std::string sha256Hex(const void* data, size_t len) {
+    Sha256 h;
+    h.update(data, len);
+    return h.finalHex();
+}
+
+std::string sha256File(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot open " + path);
+    Sha256 h;
+    std::vector<char> buf(1 << 16);
+    while (f) {
+        f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        h.update(buf.data(), static_cast<size_t>(f.gcount()));
+    }
+    return h.finalHex();
 }
 
 std::string sha256Hex(const std::string& s) { return sha256Hex(s.data(), s.size()); }
@@ -149,6 +181,50 @@ AudioBuffer decodeWav(const std::vector<uint8_t>& b) {
         pos = body + size + (size & 1);
     }
     throw std::runtime_error("wav: no data chunk");
+}
+
+// ------------------------------------------------------------------ streaming writer
+
+WavFileWriter::~WavFileWriter() {
+    try { close(); } catch (...) {}
+}
+
+bool WavFileWriter::open(const std::string& path, double sampleRate, int channels) {
+    close();
+    out_.open(path, std::ios::binary | std::ios::trunc);
+    if (!out_) return false;
+    channels_ = channels;
+    frames_ = 0;
+    AudioBuffer empty;
+    empty.sampleRate = sampleRate;
+    empty.channels = channels;
+    auto header = encodeWavFloat32(empty);  // 44-byte header, sizes patched in close()
+    out_.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    return static_cast<bool>(out_);
+}
+
+bool WavFileWriter::write(const float* interleaved, int64_t frames) {
+    if (!out_.is_open() || frames <= 0) return frames == 0;
+    const uint64_t newBytes = static_cast<uint64_t>(frames_ + frames) * static_cast<uint64_t>(channels_) * 4u;
+    if (newBytes > 0xFFFFFFFFull - 36) return false;  // RIFF limit (~3 h stereo at 48 kHz); RF64 planned
+    // Little-endian hosts (all four targets) can write floats directly.
+    out_.write(reinterpret_cast<const char*>(interleaved), static_cast<std::streamsize>(frames * channels_ * 4));
+    frames_ += frames;
+    return static_cast<bool>(out_);
+}
+
+void WavFileWriter::close() {
+    if (!out_.is_open()) return;
+    uint32_t dataBytes = static_cast<uint32_t>(frames_ * channels_ * 4);
+    std::vector<uint8_t> v;
+    put32(v, 36 + dataBytes);
+    out_.seekp(4);
+    out_.write(reinterpret_cast<const char*>(v.data()), 4);
+    v.clear();
+    put32(v, dataBytes);
+    out_.seekp(40);
+    out_.write(reinterpret_cast<const char*>(v.data()), 4);
+    out_.close();
 }
 
 std::vector<uint8_t> readFileBytes(const std::string& path) {

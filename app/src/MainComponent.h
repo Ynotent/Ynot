@@ -33,6 +33,7 @@ private:
     void refreshCompatibility();
     void openProject();
     void showAudioSettings();
+    void toggleRecording();
     void scanPlugins();
     void prepareForMobile();
     ynot::Platform selectedTarget() const;
@@ -46,7 +47,8 @@ private:
     ynot::LayoutDecision layout_{};
 
     juce::TextButton newButton_{"New Demo"}, openButton_{"Open"}, saveButton_{"Save"};
-    juce::TextButton playButton_{"Play"}, audioButton_{"Audio"}, scanButton_{"Scan Plugins"};
+    juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
+    juce::TextButton audioButton_{"Audio"}, scanButton_{"Scan Plugins"};
     juce::Label status_;
     juce::ListBox tracks_;
     juce::Label compatTitle_;

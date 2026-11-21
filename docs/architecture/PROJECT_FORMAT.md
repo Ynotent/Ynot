@@ -18,6 +18,9 @@ MySong.ynot/                    (a "package" document on macOS/iOS; a folder els
   - Identical audio is stored once.
   - Cloud sync uploads each take once.
   - Every load verifies the hash, so a partial download is detected and never played as noise.
+- Recordings in progress are streamed to `MySong.ynot/.recording/`. When recording stops they
+  are hashed and moved into `media/`. Sync clients ignore `.recording/`. If the app crashes
+  mid-take, the partial WAV stays there, and recovering it is planned.
 - Media paths are validated so they can't escape the package (`../` and absolute paths are
   rejected).
 

@@ -11,6 +11,7 @@
 //   * AudioDevice — see audio_device.hpp
 #pragma once
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <string>
@@ -104,6 +105,9 @@ public:
     void seek(int64_t frame);
     int64_t position() const { return pos_; }
     int maxBlock() const { return opts_.maxBlock; }
+    // Live-only click (never part of bounces or freezes). Realtime-safe toggle.
+    void setMetronome(bool on) { metronome_.store(on); }
+    bool metronome() const { return metronome_.load(); }
     const std::vector<EngineIssue>& issues() const { return issues_; }
 
 private:
@@ -114,6 +118,11 @@ private:
     double secondsPerTick_ = 0;
     int64_t pos_ = 0;
     std::vector<float> scratchL_, scratchR_;
+    std::atomic<bool> metronome_{false};
+    int beatsPerBar_ = 4;
+    int clickRemaining_ = 0;
+    double clickPhase_ = 0, clickInc_ = 0;
+    void renderClick(float* left, float* right, int frames, int64_t blockStart);
 };
 
 // Offline helpers built on Engine.

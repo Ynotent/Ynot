@@ -12,6 +12,7 @@
 #include "ynot/model.hpp"
 #include "ynot/platform.hpp"
 #include "ynot/project_format.hpp"
+#include "ynot/recorder.hpp"
 #include "ynot/ui_layout.hpp"
 
 namespace ynot {

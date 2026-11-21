@@ -20,11 +20,19 @@ bool hasPrecisePointer() {
 }
 }  // namespace
 
-// One track row: name, source, badges and mute/solo/freeze controls.
+constexpr int kStackBelowWidth = 560;
+
+// One track row: name, source, badges and input/arm/mute/solo/freeze controls.
 class MainComponent::TrackRow : public juce::Component {
 public:
     TrackRow(MainComponent& owner) : owner_(owner) {
-        for (auto* b : {&mute_, &solo_, &freeze_}) addAndMakeVisible(*b);
+        for (auto* b : {&arm_, &input_, &mute_, &solo_, &freeze_}) addAndMakeVisible(*b);
+        arm_.setColour(juce::TextButton::buttonOnColourId, owner_.theme_.record);
+        arm_.onClick = [this] {
+            if (owner_.session_.isRecording()) return;  // arming changes are blocked mid-take
+            owner_.session_.edit([id = id_](ynot::Project& p) { if (auto* t = p.findTrack(id)) t->armed = !t->armed; });
+        };
+        input_.onClick = [this] { owner_.session_.cycleInput(id_); };
         mute_.setClickingTogglesState(false);
         solo_.setClickingTogglesState(false);
         mute_.onClick = [this] { owner_.session_.edit([id = id_](ynot::Project& p) { if (auto* t = p.findTrack(id)) t->mute = !t->mute; }); };
@@ -44,6 +52,11 @@ public:
     void update(const ynot::Track& t, bool canFreezeHere) {
         id_ = t.id;
         track_ = t;
+        const bool audio = t.kind == ynot::TrackKind::Audio;
+        arm_.setVisible(audio);  // MIDI recording for instrument tracks comes later in M1
+        input_.setVisible(audio);
+        arm_.setToggleState(t.armed, juce::dontSendNotification);
+        input_.setButtonText(owner_.session_.inputLabel(t.id));
         mute_.setToggleState(t.mute, juce::dontSendNotification);
         solo_.setToggleState(t.solo, juce::dontSendNotification);
         freeze_.setButtonText(t.frozen ? "Unfreeze" : "Freeze");
@@ -59,7 +72,7 @@ public:
         g.setColour(Theme::hex(track_.color));
         g.fillRoundedRectangle(r.removeFromLeft(6).toFloat(), 3.f);
         r.removeFromLeft(10);
-        auto text = r.withTrimmedRight(controlsWidth());
+        auto text = stacked() ? r.removeFromTop(r.getHeight() / 2 - 2) : r.withTrimmedRight(controlsWidth());
         g.setColour(th.text);
         g.setFont(juce::FontOptions(th.bodySize + 1.f, juce::Font::bold));
         g.drawText(track_.name, text.removeFromTop(text.getHeight() / 2), juce::Justification::bottomLeft);
@@ -74,20 +87,33 @@ public:
 
     void resized() override {
         auto r = getLocalBounds().reduced(8, 6);
+        if (stacked()) r = r.removeFromBottom(r.getHeight() / 2 + 2).withTrimmedLeft(16);  // controls under the name
         const int unit = r.getHeight();
         freeze_.setBounds(r.removeFromRight(unit * 2));
         r.removeFromRight(6);
         solo_.setBounds(r.removeFromRight(unit));
         r.removeFromRight(4);
         mute_.setBounds(r.removeFromRight(unit));
+        r.removeFromRight(4);
+        arm_.setBounds(r.removeFromRight(unit));
+        r.removeFromRight(4);
+        input_.setBounds(r.removeFromRight(unit * 3 / 2));
     }
 
 private:
-    int controlsWidth() const { return getHeight() * 4 + 24; }
+    // Narrow rows (phones, split-screen) put controls on a second line.
+    bool stacked() const { return getWidth() < kStackBelowWidth; }
+    int controlsWidth() const {
+        const int unit = getHeight() - 12;
+        int w = unit * 4 + 24;  // M, S, Freeze (2 units) and gaps
+        if (arm_.isVisible()) w += unit + 4;
+        if (input_.isVisible()) w += unit * 3 / 2 + 4;
+        return w;
+    }
     MainComponent& owner_;
     std::string id_;
     ynot::Track track_;
-    juce::TextButton mute_{"M"}, solo_{"S"}, freeze_{"Freeze"};
+    juce::TextButton arm_{"R"}, input_{"In 1"}, mute_{"M"}, solo_{"S"}, freeze_{"Freeze"};
 };
 
 MainComponent::MainComponent(Session& session, JucePluginHost& host)
@@ -95,8 +121,13 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     theme_.apply(lnf_);
     setLookAndFeel(&lnf_);
 
-    for (auto* b : {&newButton_, &openButton_, &saveButton_, &playButton_, &audioButton_, &scanButton_})
+    for (auto* b : {&newButton_, &openButton_, &saveButton_, &playButton_, &recordButton_, &clickButton_,
+                    &audioButton_, &scanButton_})
         addAndMakeVisible(*b);
+    recordButton_.setColour(juce::TextButton::buttonOnColourId, theme_.record);
+    recordButton_.onClick = [this] { toggleRecording(); };
+    clickButton_.setClickingTogglesState(true);
+    clickButton_.onClick = [this] { session_.setMetronome(clickButton_.getToggleState()); };
     addAndMakeVisible(status_);
     addAndMakeVisible(tracks_);
     addAndMakeVisible(compatTitle_);
@@ -157,7 +188,8 @@ void MainComponent::resized() {
     const bool compact = layout_.layout == ynot::LayoutClass::Compact;
     const int buttonWidth = compact ? std::max(target * 2, 84) : 110;
     auto bar = r.removeFromTop(target);
-    for (auto* b : {&playButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_}) {
+    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &newButton_, &openButton_, &saveButton_,
+                    &audioButton_, &scanButton_}) {
         if (!b->isVisible()) continue;
         if (bar.getWidth() < buttonWidth) {
             r.removeFromTop(6);
@@ -173,7 +205,8 @@ void MainComponent::resized() {
     status_.setBounds(bar);
     r.removeFromTop(10);
 
-    tracks_.setRowHeight(std::max(target + 12, 56));
+    const int listWidth = layout_.showPerTrackInspector ? r.getWidth() - std::min(420, r.getWidth() / 3) - 12 : r.getWidth();
+    tracks_.setRowHeight(listWidth < kStackBelowWidth ? target * 2 + 24 : std::max(target + 12, 56));
     if (layout_.showPerTrackInspector) {
         auto side = r.removeFromRight(std::min(420, r.getWidth() / 3));
         r.removeFromRight(12);
@@ -229,6 +262,7 @@ void MainComponent::timerCallback() {
     juce::String s;
     s << juce::String(session_.project().name) << "   ";
     s << juce::String(session_.positionSeconds(), 1) << " s   ";
+    if (session_.isRecording()) s << "REC " << juce::String(session_.recordingSeconds(), 1) << " s   ";
     auto* dev = session_.device().manager().getCurrentAudioDevice();
     s << (dev ? dev->getTypeName() + ": " + dev->getName() : juce::String("no audio device"));
     status_.setText(s, juce::dontSendNotification);
@@ -236,6 +270,8 @@ void MainComponent::timerCallback() {
 
 void MainComponent::refresh() {
     playButton_.setButtonText(session_.isPlaying() ? "Stop" : "Play");
+    recordButton_.setToggleState(session_.isRecording(), juce::dontSendNotification);
+    recordButton_.setButtonText(session_.isRecording() ? "Stop Rec" : "Record");
     playButton_.setToggleState(session_.isPlaying(), juce::dontSendNotification);
     tracks_.updateContent();
     tracks_.repaint();
@@ -281,6 +317,24 @@ void MainComponent::openProject() {
                                                                          "Can't open project", e.what());
                               }
                           });
+}
+
+void MainComponent::toggleRecording() {
+    if (session_.isRecording()) {
+        auto result = session_.stopRecording();
+        juce::String msg;
+        if (result.droppedFrames > 0)
+            msg << "The disk couldn't keep up: " << juce::String(result.droppedFrames)
+                << " samples were lost. Try a larger audio buffer or a faster drive.\n";
+        if (!result.error.empty()) msg << juce::String(result.error);
+        if (msg.isNotEmpty())
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Recording", msg);
+    } else {
+        std::string error;
+        if (!session_.startRecording(error))
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon, "Can't record yet", error);
+    }
+    refresh();
 }
 
 void MainComponent::showAudioSettings() {

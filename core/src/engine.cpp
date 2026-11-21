@@ -190,6 +190,8 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
     tracks_.clear();
     issues_.clear();
     secondsPerTick_ = project.secondsPerTick();
+    beatsPerBar_ = std::max(1, project.timeSigNumerator);
+    clickRemaining_ = 0;
     scratchL_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
     scratchR_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
     const double sr = opts.sampleRate;
@@ -379,7 +381,35 @@ void Engine::process(float* left, float* right, int frames) {
             right[i] += r[i] * gr;
         }
     }
+    if (metronome_.load(std::memory_order_relaxed)) renderClick(left, right, frames, blockStart);
     pos_ = blockEnd;
+}
+
+void Engine::renderClick(float* left, float* right, int frames, int64_t blockStart) {
+    const double sr = opts_.sampleRate;
+    const double framesPerBeat = static_cast<double>(kTicksPerQuarter) * secondsPerTick_ * sr;
+    const int clickLen = static_cast<int>(0.03 * sr);  // 30 ms
+    // First beat at or after the block start.
+    auto beat = static_cast<int64_t>(std::ceil(static_cast<double>(blockStart) / framesPerBeat));
+    int64_t nextBeatFrame = static_cast<int64_t>(std::llround(static_cast<double>(beat) * framesPerBeat));
+    for (int i = 0; i < frames; ++i) {
+        if (blockStart + i == nextBeatFrame) {
+            const bool downbeat = beat % beatsPerBar_ == 0;
+            clickInc_ = (downbeat ? 1500.0 : 1000.0) / sr;
+            clickPhase_ = 0;
+            clickRemaining_ = clickLen;
+            ++beat;
+            nextBeatFrame = static_cast<int64_t>(std::llround(static_cast<double>(beat) * framesPerBeat));
+        }
+        if (clickRemaining_ > 0) {
+            const double env = static_cast<double>(clickRemaining_) / clickLen;
+            const auto v = static_cast<float>(0.3 * env * env * std::sin(2 * kPi * clickPhase_));
+            clickPhase_ += clickInc_;
+            --clickRemaining_;
+            left[i] += v;
+            right[i] += v;
+        }
+    }
 }
 
 namespace {

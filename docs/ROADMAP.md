@@ -17,7 +17,7 @@ real-device test matrix for that milestone has been completed and signed off.**
 and the headless smoke test pass, and the UI was rendered at phone, tablet and desktop sizes.
 Nothing has been built for macOS, Windows or iOS yet.
 
-Core: verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 31/31
+Core: verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 41/41
 tests pass. The macOS, Windows, iOS and Android CI jobs are defined in
 `.github/workflows/ci.yml` but **have not run yet**. Once they pass, a platform moves to
 `core-compiles`. None of these statuses means the app is usable on that platform.
@@ -45,9 +45,26 @@ Done so far (built and tested on the Linux dev host only):
   iPhone & Android" from the UI.
 - Responsive main window driven by `decideLayout()` and `design/tokens.json`.
 
+- **Audio recording:**
+  - Lock-free capture on the audio thread.
+  - A drain thread streams takes to disk, so long takes never sit in memory.
+  - Dropped audio is reported if the disk can't keep up.
+  - Latency compensation uses the driver's reported latency.
+  - Punch-in replaces only the overlapped parts of existing clips.
+  - Takes become content-addressed media.
+  - Per-track arm and input selection. Input choices stay on the device and are never saved
+    into the project.
+  - Metronome on live output only, never in bounces or freezes.
+  - Microphone permission handling for Android.
+
 Still to do:
 - Build and run on a real Mac; out-of-process plugin hosting and scanning; plugin editor windows.
-- Recording; timeline editing (clips, MIDI, automation).
+- Input monitoring (software monitoring with latency display); count-in; loop/cycle recording
+  with take lanes.
+- MIDI recording from controllers onto instrument tracks.
+- Recording latency calibration tool (loopback test). Driver-reported latency is often wrong
+  by a few milliseconds.
+- Timeline editing (clips, MIDI, automation).
 - Features: record, edit, arrange, mix, freeze, open and save `.ynot`.
 - Replace linear resampling with windowed-sinc. Add a recording latency calibration tool.
 - **Real-device gate:**

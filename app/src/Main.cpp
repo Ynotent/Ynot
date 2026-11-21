@@ -41,6 +41,42 @@ static int runSmokeTest(const juce::File& dir) {
               << std::endl;
     session.stopAudio();
 
+    // Record 1 s of a 440 Hz tone onto Vocals through the same callback the device uses.
+    std::string vocalsId;
+    for (auto& t : session.project().tracks)
+        if (t.name == "Vocals") vocalsId = t.id;
+    session.edit([&](ynot::Project& p) {
+        for (auto& t : p.tracks) t.armed = t.id == vocalsId;
+    });
+    std::string recError;
+    session.simulateInputsForTesting(2);
+    expect(session.startRecording(recError), "recording starts on the armed track");
+    if (!recError.empty()) std::cout << "       " << recError << std::endl;
+    {
+        const int block = 256;
+        std::vector<float> in(block), silence(block), outL(block), outR(block);
+        const float* ins[2] = {in.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        for (int b = 0; b < 48000 / block; ++b) {
+            for (int i = 0; i < block; ++i)
+                in[static_cast<size_t>(i)] = 0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f *
+                                                             static_cast<float>(b * block + i) / 48000.0f);
+            session.processForTesting(ins, 2, outs, 2, block);
+        }
+    }
+    const size_t clipsBefore = session.project().findTrack(vocalsId)->audioClips.size();
+    auto rec = session.stopRecording();
+    const auto* vox = session.project().findTrack(vocalsId);
+    expect(rec.newClips.size() == 1 && rec.droppedFrames == 0, "take committed with no dropped audio");
+    expect(vox->audioClips.size() >= clipsBefore, "take placed on the Vocals track");
+    bool takeOk = false;
+    for (auto& c : vox->audioClips)
+        if (!rec.newClips.empty() && c.id == rec.newClips[0])
+            if (auto* m = session.project().findMedia(c.mediaId))
+                takeOk = m->origin == "recording" && m->frames > 47000 &&
+                         dir.getChildFile(m->fileName).existsAsFile();
+    expect(takeOk, "take stored as content-addressed media in the package");
+
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     expect(ynot::projectToJson(reopened) == ynot::projectToJson(session.project()), "save/reopen is lossless");
