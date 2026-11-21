@@ -12,7 +12,18 @@ Based on CI run #1 (commit `0fea6cc`, 2026-11-21) on GitHub-hosted runners:
 |---|---|---|
 | Windows | **native-shell-builds** | MSVC x64 (CI run #1): core builds and 52/52 tests pass; the JUCE app (WASAPI + VST3 hosting) builds, its 9 adapter tests pass, and the headless smoke test passes (including recording through the audio callback). |
 | Android | **core-compiles** | Core cross-compiles with the NDK for arm64-v8a and x86_64. No Android app shell yet (M5). |
-| macOS | **native-shell-builds** (M1 in progress) | CI run #9 (`macos-15`, Xcode 16.4, Apple Silicon): core builds universal (arm64 + x86_64) and 57/57 tests pass; the JUCE app builds, its adapter tests pass, and the headless smoke test passes **with live CoreAudio output**, audio + MIDI recording, monitoring and save/reopen. **First real device (2026-11-21):** on an M2 MacBook Pro (macOS 14.3.1, Command Line Tools only, Apple Clang 15), `tools/macos-test.sh` passed configure, build, 57 core tests, app adapter tests and the smoke test against the Mac's real CoreAudio devices. Hands-on testing found the first real-world issue: with the Mac's default output set to a virtual device (Pro Tools Audio Bridge, BlackHole...), Ynot played silently, and it didn't remember a device choice. Fixed: the device choice is now saved per machine, and the status line warns about virtual outputs. Hands-on checklist continues. |
+| macOS | **native-shell-builds** (M1 in progress) | CI run #9 (`macos-15`, Xcode 16.4, Apple Silicon): core builds universal (arm64 + x86_64) and 57/57 tests pass; the JUCE app builds, its adapter tests pass, and the headless smoke test passes **with live CoreAudio output**, audio + MIDI recording, monitoring and save/reopen. **First real device (2026-11-21):** on an M2 MacBook Pro (macOS 14.3.1, Command Line Tools only, Apple Clang 15), `tools/macos-test.sh` passed configure, build, 57 core tests, app adapter tests and the smoke test against the Mac's real CoreAudio devices. Hands-on testing found the first real-world issue: with the Mac's default output set to a virtual device (Pro Tools Audio Bridge, BlackHole...), Ynot played silently, and it didn't remember a device choice. Fixed: the device choice is now saved per machine, and the status line warns about virtual outputs. Hands-on results on the same M2 (2026-11-21), all confirmed working by the tester:
+  - playback;
+  - device choice remembered across launches;
+  - live MIDI from the on-screen piano and computer keyboard;
+  - MIDI recording with recording feedback;
+  - Return to start;
+  - MPC-style 62% swing quantize while recording;
+  - punch recording replacing only the punched bar;
+  - the 6/8 click.
+
+  Not yet checked on hardware: recording alignment against the click (checklist step 5),
+  monitoring latency (6), buffer sizes (3), plugin scan (10), save/reopen (11). |
 | iOS / iPadOS | **native-shell-builds** (unsigned, simulator only) | CI run #6: core cross-compiles for arm64 devices, and the full JUCE app builds for the iOS simulator (Xcode 16.4, unsigned). It has never been signed, installed or run on an iPhone/iPad. |
 | Linux (dev host only) | n/a | Core with ASan/UBSan and Clang `-Werror`, app build and smoke test pass in CI and locally. |
 
