@@ -3,6 +3,7 @@
 
 #include <iostream>
 
+#include "../src/JuceAudioDevice.h"
 #include "../src/JucePluginHost.h"
 #include "ynot/ynot.hpp"
 
@@ -108,6 +109,16 @@ int main() {
         bool desktop = ynot::currentPlatform() == ynot::Platform::MacOS || ynot::currentPlatform() == ynot::Platform::Windows;
         expect(inst && host.isAvailable(*inst) == desktop, "VST3 availability follows the platform profile");
         expect((host.catalog().installed.size() == 1) == desktop, "device catalog lists only loadable plugins");
+    }
+
+    {   // Virtual/loopback outputs are flagged; real hardware isn't.
+        using D = JuceAudioDevice;
+        expect(D::isLikelyVirtualDevice("BlackHole 16ch") && D::isLikelyVirtualDevice("Pro Tools Audio Bridge 2-A") &&
+                   D::isLikelyVirtualDevice("Microsoft Teams Audio") && D::isLikelyVirtualDevice("ZoomAudioDevice"),
+               "virtual output devices are recognised");
+        expect(!D::isLikelyVirtualDevice("MacBook Pro Speakers") && !D::isLikelyVirtualDevice("Scarlett 2i2 USB") &&
+                   !D::isLikelyVirtualDevice("External Headphones"),
+               "real speakers and interfaces are not flagged");
     }
 
     std::cout << (failures ? "APP TESTS FAILED" : "app tests passed") << "\n";

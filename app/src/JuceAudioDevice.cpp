@@ -39,7 +39,11 @@ std::vector<ynot::AudioDeviceInfo> JuceAudioDevice::enumerate() {
 bool JuceAudioDevice::open(const std::string& deviceId, const ynot::AudioStreamConfig& cfg, ynot::AudioCallback cb) {
     close();
     const int numIns = static_cast<int>(cfg.inputChannels.size());
-    juce::String err = manager_.initialiseWithDefaultDevices(numIns, cfg.outputChannels);
+    // Restore the device this user last chose on this machine (device-local, never synced).
+    std::unique_ptr<juce::XmlElement> saved;
+    if (deviceId.empty() && stateFile_.existsAsFile()) saved = juce::XmlDocument::parse(stateFile_);
+    juce::String err = manager_.initialise(numIns, cfg.outputChannels, saved.get(), true);
+    const bool restored = saved != nullptr && err.isEmpty();
     if (err.isEmpty() && !deviceId.empty()) {
         juce::String id(deviceId);
         auto type = id.upToFirstOccurrenceOf("/", false, false);
@@ -50,7 +54,7 @@ bool JuceAudioDevice::open(const std::string& deviceId, const ynot::AudioStreamC
         setup.inputDeviceName = numIns > 0 ? name : juce::String();
         err = manager_.setAudioDeviceSetup(setup, true);
     }
-    if (err.isEmpty()) {
+    if (err.isEmpty() && !restored) {
         auto setup = manager_.getAudioDeviceSetup();
         setup.sampleRate = cfg.sampleRate;
         setup.bufferSize = cfg.bufferSize;
@@ -64,7 +68,32 @@ bool JuceAudioDevice::open(const std::string& deviceId, const ynot::AudioStreamC
     if (err.isNotEmpty()) return false;
     cb_ = std::move(cb);
     manager_.addAudioCallback(this);
+    manager_.addChangeListener(this);  // save future changes made in Audio settings
     return true;
+}
+
+void JuceAudioDevice::changeListenerCallback(juce::ChangeBroadcaster*) {
+    if (stateFile_ == juce::File()) return;
+    if (auto xml = manager_.createStateXml()) {
+        stateFile_.getParentDirectory().createDirectory();
+        xml->writeTo(stateFile_);
+    }
+}
+
+std::string JuceAudioDevice::virtualDeviceWarning() const {
+    auto* d = manager_.getCurrentAudioDevice();
+    if (!d) return {};
+    const auto out = manager_.getAudioDeviceSetup().outputDeviceName;
+    return isLikelyVirtualDevice(out) ? out.toStdString() : std::string();
+}
+
+bool JuceAudioDevice::isLikelyVirtualDevice(const juce::String& name) {
+    // Loopback/routing/conferencing drivers: audio sent here is usually not heard.
+    for (const char* v : {"BlackHole", "Soundflower", "Loopback", "Audio Bridge", "Teams Audio", "ZoomAudio",
+                          "Zoom Audio", "VB-Audio", "VB-Cable", "CABLE Input", "Background Music", "Krisp",
+                          "Screen Record", "QuickTime"})
+        if (name.containsIgnoreCase(v)) return true;
+    return false;
 }
 
 void JuceAudioDevice::start() { running_ = true; }
@@ -72,6 +101,7 @@ void JuceAudioDevice::stop() { running_ = false; }
 
 void JuceAudioDevice::close() {
     running_ = false;
+    manager_.removeChangeListener(this);
     manager_.removeAudioCallback(this);  // blocks until the callback has returned
     manager_.closeAudioDevice();
     cb_ = nullptr;

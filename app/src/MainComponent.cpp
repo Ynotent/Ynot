@@ -191,10 +191,20 @@ void MainComponent::timerCallback() {
     if (session_.isRecording()) s << "REC " << juce::String(session_.recordingSeconds(), 1) << " s   ";
     if (session_.monitoring() && dev) s << "monitor " << juce::String(session_.monitoringLatencyMs(), 1) << " ms   ";
     s << (dev ? dev->getTypeName() + ": " + dev->getName() : juce::String("no audio device"));
-    if (keyboard_.isVisible()) {
-        bool instrumentArmed = false;
-        for (auto& t : session_.project().tracks) instrumentArmed |= t.armed && t.kind == ynot::TrackKind::Instrument;
-        if (!instrumentArmed) s << "   Arm an instrument track (R) to play";
+    juce::String armedInstrument;
+    for (auto& t : session_.project().tracks)
+        if (t.armed && t.kind == ynot::TrackKind::Instrument && armedInstrument.isEmpty()) armedInstrument = t.name;
+    if (keyboard_.isVisible() && armedInstrument.isEmpty()) s << "   Arm an instrument track (R) to play";
+    else if (armedInstrument.isNotEmpty() && !session_.isRecording())
+        s << "   " << armedInstrument << " armed: playing live. Press Record to capture.";
+    const auto virtualOut = session_.device().virtualDeviceWarning();
+    if (!virtualOut.empty()) {
+        // The most common "I hear nothing": the Mac's default output is a loopback driver.
+        status_.setColour(juce::Label::textColourId, theme_.accent);
+        s = "Output is \"" + juce::String(virtualOut) + "\", a virtual device, so you may hear nothing. "
+            "Click Audio and choose your speakers or headphones.   " + s;
+    } else {
+        status_.setColour(juce::Label::textColourId, theme_.text);
     }
     status_.setText(s, juce::dontSendNotification);
     playButton_.setButtonText(session_.isPlaying() ? "Stop" : "Play");

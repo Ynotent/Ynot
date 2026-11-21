@@ -29,7 +29,7 @@ Use **headphones** for steps 5 and 6. Speakers plus the built-in mic will feed b
 
 | # | Do this | Expected |
 |---|---|---|
-| 1 | Look at the status line (top right). | Shows `CoreAudio:` and your output device. |
+| 1 | Look at the status line (top right). | Shows `CoreAudio:` and your output device. If it warns that the output is a virtual device (BlackHole, Pro Tools Audio Bridge, Zoom, Teams...), click **Audio** and pick your speakers or headphones. Ynot remembers the choice next time. |
 | 2 | **More/New Demo**, then **Play**. | You hear a steady tone (Vocals) and chords (Keys). Strings is silent because its plugin doesn't exist. The playhead moves; **Play** turns to **Stop**. |
 | 3 | **Audio** → pick another output (e.g. headphones vs speakers) and buffer sizes 64 / 256 / 1024. Play each. | Sound follows the device with no crackles. Note any buffer size that crackles. |
 | 4 | Turn on **Click** and play. | A click on every beat, accented on beat 1. |

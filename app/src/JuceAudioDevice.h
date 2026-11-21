@@ -11,7 +11,9 @@
 
 namespace ynotapp {
 
-class JuceAudioDevice : public ynot::AudioDevice, private juce::AudioIODeviceCallback {
+class JuceAudioDevice : public ynot::AudioDevice,
+                        private juce::AudioIODeviceCallback,
+                        private juce::ChangeListener {
 public:
     JuceAudioDevice();
     ~JuceAudioDevice() override;
@@ -34,13 +36,22 @@ public:
 
     static ynot::AudioApi apiForTypeName(const juce::String& typeName);
 
+    // Where the chosen device is remembered on this machine. Set before open().
+    void setStateFile(const juce::File& f) { stateFile_ = f; }
+    // Name of the output device if it's a virtual/loopback device the user likely can't hear.
+    std::string virtualDeviceWarning() const;
+    static bool isLikelyVirtualDevice(const juce::String& deviceName);
+
 private:
     void audioDeviceIOCallbackWithContext(const float* const* in, int numIn, float* const* out, int numOut,
                                           int numSamples, const juce::AudioIODeviceCallbackContext&) override;
     void audioDeviceAboutToStart(juce::AudioIODevice*) override {}
     void audioDeviceStopped() override {}
 
+    void changeListenerCallback(juce::ChangeBroadcaster*) override;
+
     juce::AudioDeviceManager manager_;
+    juce::File stateFile_;
     ynot::AudioCallback cb_;
     std::atomic<bool> running_{false};
     std::string lastError_;

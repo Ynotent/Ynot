@@ -5,6 +5,8 @@
 namespace ynotapp {
 
 Session::Session(JucePluginHost& host) : host_(host) {
+    device_.setStateFile(juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                             .getChildFile("Ynot").getChildFile("audio-device.xml"));
     midiBuffer_.ensureSize(8192);
     liveMidi_.resize(kMaxLiveMidi);
     chunkMidi_.resize(kMaxLiveMidi);
