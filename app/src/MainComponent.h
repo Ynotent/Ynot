@@ -65,6 +65,7 @@ private:
     void importFiles(const juce::Array<juce::File>& files, const std::string& trackId, int64_t startTick);
     void addPunchItems(juce::PopupMenu& m);
     void addTimeSignatureItems(juce::PopupMenu& m);
+    void addSampleRateItems(juce::PopupMenu& m);
     ynot::Platform selectedTarget() const;
     bool compact() const { return layout_.layout == ynot::LayoutClass::Compact; }
 
@@ -77,7 +78,7 @@ private:
     // Transport and editing (always visible).
     juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
     juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
-    juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"};
+    juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"}, rateButton_{"48 kHz"};
     juce::TextButton addTrackButton_{"+ Track"};
     juce::TextButton undoButton_{"Undo"}, redoButton_{"Redo"}, keysButton_{"Keys"};
     // File/device actions: toolbar on larger screens, "More" menu on phones.

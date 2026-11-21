@@ -42,6 +42,15 @@ public:
     std::string virtualDeviceWarning() const;
     static bool isLikelyVirtualDevice(const juce::String& deviceName);
 
+    // Sample rates the open device offers (empty when no device is open).
+    std::vector<double> availableSampleRates() const;
+    // Switch the open device to `rate`. Returns an error message, or empty on success.
+    juce::String setSampleRate(double rate);
+    static juce::String rateLabel(double rate);  // 44100 -> "44.1 kHz"
+    // Called on the message thread after any change to the device (from Ynot or the
+    // Audio settings window): new device, rate, buffer size or channels.
+    std::function<void()> onDeviceChanged;
+
 private:
     void audioDeviceIOCallbackWithContext(const float* const* in, int numIn, float* const* out, int numOut,
                                           int numSamples, const juce::AudioIODeviceCallbackContext&) override;

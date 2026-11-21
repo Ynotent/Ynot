@@ -58,6 +58,13 @@ public:
     bool isPlaying() const { return playing_.load(); }
     double positionSeconds() const;
 
+    // Sample rate. The project remembers its rate; opening it switches this device to that
+    // rate when the device supports it. Audio at other rates is resampled on playback.
+    double sampleRate() const { return sampleRate_; }
+    static const std::vector<double>& standardSampleRates();  // 44.1, 48, 88.2, 96, 192 kHz
+    std::vector<double> availableSampleRates() const;          // what this device offers
+    juce::String setSampleRate(double rate);                   // error message, or empty
+
     // Recording (armed audio tracks). Input channel choices are device-local and
     // never saved into the project, because another device has different inputs.
     bool startRecording(std::string& error);
@@ -133,6 +140,9 @@ public:
 
 private:
     void rebuild();
+    void deviceChanged();                            // device reconfigured (any source)
+    void applyDeviceFormat(double rate, int block);  // adopt a new rate/block size
+    void applyProjectRate();                         // switch the device to the project's rate
     juce::String commitImport(const juce::File& file, const DecodedAudio& decoded, const std::string& trackId,
                               int64_t startTick);
     void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage&) override;
@@ -152,6 +162,7 @@ private:
     std::atomic<bool> inCallback_{false};
     std::atomic<bool> playing_{false};
     std::atomic<int64_t> position_{0};
+    static constexpr int kScratchFrames = 16384;
     std::vector<float> scratchL_, scratchR_;
 
     ynot::Recorder recorder_;

@@ -43,7 +43,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
 
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
-                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &addTrackButton_})
+                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &rateButton_, &addTrackButton_})
         addAndMakeVisible(*b);
     addTrackButton_.onClick = [this] {
         juce::PopupMenu m;
@@ -66,12 +66,18 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
         addTimeSignatureItems(m);
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(timeSigButton_));
     };
+    rateButton_.setTooltip("Sample rate");
+    rateButton_.onClick = [this] {
+        juce::PopupMenu m;
+        addSampleRateItems(m);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(rateButton_));
+    };
     addChildComponent(keyboard_);
     // Clicking a button must not steal keyboard focus, or musical typing stops after pressing R/Record.
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_,
-                    &addTrackButton_})
+                    &rateButton_, &addTrackButton_})
         b->setMouseClickGrabsKeyboardFocus(false);
     // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
     // (play/stop) and Return (to start) still work while the keyboard has focus.
@@ -149,10 +155,11 @@ void MainComponent::resized() {
     std::vector<juce::TextButton*> toolbar{&playButton_, &recordButton_, &clickButton_};
     countInButton_.setVisible(!compact());
     monitorButton_.setVisible(!compact());
-    for (auto* b : {&quantizeButton_, &punchButton_, &timeSigButton_, &addTrackButton_}) b->setVisible(!compact());
+    for (auto* b : {&quantizeButton_, &punchButton_, &timeSigButton_, &rateButton_, &addTrackButton_})
+        b->setVisible(!compact());
     if (!compact()) {
         for (auto* b : {&countInButton_, &monitorButton_, &punchButton_, &quantizeButton_, &timeSigButton_,
-                        &addTrackButton_})
+                        &rateButton_, &addTrackButton_})
             toolbar.push_back(b);
     }
     for (auto* b : {&keysButton_, &undoButton_, &redoButton_}) toolbar.push_back(b);
@@ -290,6 +297,8 @@ void MainComponent::refresh() {
     if (session_.hasProject())
         timeSigButton_.setButtonText(juce::String(session_.project().timeSigNumerator) + "/" +
                                      juce::String(session_.project().timeSigDenominator));
+    rateButton_.setButtonText(JuceAudioDevice::rateLabel(session_.sampleRate()));
+    rateButton_.setEnabled(!session_.isRecording());
     {
         const auto* preset = ynot::findQuantizePreset(session_.recordQuantizeId());
         quantizeButton_.setButtonText(preset ? "Q: " + juce::String(ynot::gridName(preset->settings.gridTicks)) +
@@ -392,6 +401,10 @@ void MainComponent::showMoreMenu() {
         m.addSubMenu("Quantize", q);
         m.addSubMenu("Punch recording", punch);
         m.addSubMenu("Time signature", ts);
+        juce::PopupMenu rate;
+        addSampleRateItems(rate);
+        m.addSubMenu("Sample rate (" + JuceAudioDevice::rateLabel(session_.sampleRate()) + ")", rate,
+                     !session_.isRecording());
     }
     m.addSeparator();
     m.addItem("Split clip at playhead", arrange_.hasSelection(), false, [this] { arrange_.splitSelectedAtPlayhead(); });
@@ -500,6 +513,30 @@ void MainComponent::addTimeSignatureItems(juce::PopupMenu& m) {
                               session_.setTimeSignature(n, d);
                               refresh();
                           });
+}
+
+void MainComponent::addSampleRateItems(juce::PopupMenu& m) {
+    const auto available = session_.availableSampleRates();
+    const double current = session_.sampleRate();
+    auto has = [&](double r) { return std::find(available.begin(), available.end(), r) != available.end(); };
+    auto addRate = [&](double r) {
+        const bool ok = has(r);
+        m.addItem(JuceAudioDevice::rateLabel(r) + (ok ? juce::String() : "  (not on this device)"), ok,
+                  std::abs(r - current) < 0.5, [this, r] {
+                      const auto err = session_.setSampleRate(r);
+                      if (err.isNotEmpty())
+                          juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                                 "Sample rate", err);
+                      refresh();
+                  });
+    };
+    for (double r : Session::standardSampleRates()) addRate(r);
+    for (double r : available)  // anything else the interface offers (e.g. 32 or 176.4 kHz)
+        if (r >= 32000 && std::find(Session::standardSampleRates().begin(), Session::standardSampleRates().end(), r) ==
+                              Session::standardSampleRates().end())
+            addRate(r);
+    m.addSeparator();
+    m.addItem("Saved with the project. Audio at other rates is converted on playback.", false, false, [] {});
 }
 
 void MainComponent::showCompatibilityDialog() {

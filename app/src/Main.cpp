@@ -316,6 +316,51 @@ static int runSmokeTest(const juce::File& dir) {
         }
     }
 
+    {   // Sample rate: switching keeps the playhead's musical position, is saved with the project,
+        // and a take recorded at 96 kHz keeps its rate and the right length on the timeline.
+        const int64_t bar2 = ynot::kTicksPerQuarter * 4;
+        session.seekToTick(bar2);
+        auto err = session.setSampleRate(96000);
+        auto near = [](double a, double b) { return std::abs(a - b) < 0.5; };
+        expect(err.isEmpty() && near(session.sampleRate(), 96000) && session.positionTick() == bar2 &&
+                   near(session.project().sampleRateHint, 96000),
+               "switching to 96 kHz keeps the playhead in place and is saved with the project");
+        expect(session.setSampleRate(12345).isNotEmpty() && near(session.sampleRate(), 96000),
+               "an unsupported rate is refused with a message");
+        session.edit([&](ynot::Project& p) {
+            for (auto& t : p.tracks) t.armed = t.id == vocalsId;
+        });
+        session.setPunchEnabled(false);
+        session.setCountInBars(0);
+        std::string recErr;
+        const bool started = session.startRecording(recErr);
+        const int block = 512, rate = 96000;
+        std::vector<float> in(block), silence(block), outL(block), outR(block);
+        const float* ins[2] = {in.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        for (int b = 0; b < rate / block; ++b) {  // 1 s
+            for (int i = 0; i < block; ++i)
+                in[static_cast<size_t>(i)] = 0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f *
+                                                             static_cast<float>(b * block + i) / float(rate));
+            session.processForTesting(ins, 2, outs, 2, block);
+        }
+        auto res = session.stopRecording();
+        bool take96Ok = false;
+        const double oneSecondTicks = 1.0 / session.project().secondsPerTick();
+        for (auto& c : session.project().findTrack(vocalsId)->audioClips)
+            if (started && !res.newClips.empty() && c.id == res.newClips[0])
+                if (auto* m = session.project().findMedia(c.mediaId))
+                    take96Ok = near(m->sampleRate, 96000) && std::abs(m->frames - rate) < block &&
+                             std::abs(static_cast<double>(c.lengthTick) - oneSecondTicks) < 20 && c.startTick == bar2;
+        expect(take96Ok, "a 1 s take at 96 kHz is stored at 96 kHz and spans 1 s on the timeline");
+
+        err = session.setSampleRate(44100);
+        auto saved = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
+        expect(err.isEmpty() && near(session.sampleRate(), 44100) && near(saved.sampleRateHint, 44100),
+               "switching to 44.1 kHz works and the project file remembers it");
+        session.setSampleRate(48000);
+    }
+
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     expect(ynot::projectToJson(reopened) == ynot::projectToJson(session.project()), "save/reopen is lossless");

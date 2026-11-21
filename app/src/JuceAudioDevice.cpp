@@ -73,11 +73,38 @@ bool JuceAudioDevice::open(const std::string& deviceId, const ynot::AudioStreamC
 }
 
 void JuceAudioDevice::changeListenerCallback(juce::ChangeBroadcaster*) {
-    if (stateFile_ == juce::File()) return;
-    if (auto xml = manager_.createStateXml()) {
-        stateFile_.getParentDirectory().createDirectory();
-        xml->writeTo(stateFile_);
-    }
+    if (stateFile_ != juce::File())
+        if (auto xml = manager_.createStateXml()) {
+            stateFile_.getParentDirectory().createDirectory();
+            xml->writeTo(stateFile_);
+        }
+    if (onDeviceChanged) onDeviceChanged();
+}
+
+juce::String JuceAudioDevice::rateLabel(double rate) {
+    const double k = rate / 1000.0;
+    return juce::String(k, std::abs(k - std::round(k)) < 1e-6 ? 0 : 1) + " kHz";  // "48 kHz", "44.1 kHz"
+}
+
+std::vector<double> JuceAudioDevice::availableSampleRates() const {
+    std::vector<double> out;
+    if (auto* d = manager_.getCurrentAudioDevice())
+        for (double r : d->getAvailableSampleRates()) out.push_back(r);
+    return out;
+}
+
+juce::String JuceAudioDevice::setSampleRate(double rate) {
+    auto* d = manager_.getCurrentAudioDevice();
+    if (d == nullptr) return "No audio device is open.";
+    const auto name = d->getName();  // the device object may be replaced below
+    if (!d->getAvailableSampleRates().contains(rate)) return name + " doesn't support " + rateLabel(rate) + ".";
+    auto setup = manager_.getAudioDeviceSetup();
+    if (std::abs(setup.sampleRate - rate) < 0.5) return {};
+    setup.sampleRate = rate;
+    auto err = manager_.setAudioDeviceSetup(setup, true);
+    if (err.isEmpty() && std::abs(currentSampleRate() - rate) > 0.5)
+        err = name + " stayed at " + rateLabel(currentSampleRate()) + ".";
+    return err;
 }
 
 std::string JuceAudioDevice::virtualDeviceWarning() const {

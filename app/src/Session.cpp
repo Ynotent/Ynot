@@ -13,7 +13,11 @@ Session::Session(JucePluginHost& host) : host_(host) {
     liveMidi_.resize(kMaxLiveMidi);
     chunkMidi_.resize(kMaxLiveMidi);
     collector_.reset(sampleRate_);
-    keyboardState_.addListener(&collector_);  // on-screen keyboard -> same path as hardware MIDI
+    // Fixed size so the audio thread never sees it reallocate when the device changes.
+    scratchL_.assign(kScratchFrames, 0.f);
+    scratchR_.assign(kScratchFrames, 0.f);
+    keyboardState_.addListener(&collector_);
+    device_.onDeviceChanged = [this] { deviceChanged(); };  // on-screen keyboard -> same path as hardware MIDI
 }
 
 Session::~Session() {
@@ -30,6 +34,7 @@ void Session::newDemo(const juce::File& dir) {
     history_.clear();
     dir_ = dir;
     loaded_ = true;
+    project_.sampleRateHint = sampleRate_;  // a new project starts at the device's current rate
     ynot::saveProjectPackage(project_, dir_.getFullPathName().toStdString());
     media_ = std::make_unique<ynot::PackageMediaProvider>(dir_.getFullPathName().toStdString());
     rebuild();
@@ -42,6 +47,7 @@ void Session::open(const juce::File& dir) {
     loaded_ = true;
     media_ = std::make_unique<ynot::PackageMediaProvider>(dir_.getFullPathName().toStdString());
     rebuild();
+    applyProjectRate();
 }
 
 void Session::save() {
@@ -154,8 +160,6 @@ bool Session::startAudio(const std::string& deviceId) {
     if (!ok) return false;
     sampleRate_ = device_.currentSampleRate();
     blockSize_ = std::max(device_.currentBufferSize(), 64);
-    scratchL_.assign(static_cast<size_t>(blockSize_), 0.f);
-    scratchR_.assign(static_cast<size_t>(blockSize_), 0.f);
     collector_.reset(sampleRate_);
     // Listen to every MIDI input (USB/Bluetooth controllers, virtual ports).
     for (auto& d : juce::MidiInput::getAvailableDevices())
@@ -164,7 +168,70 @@ bool Session::startAudio(const std::string& deviceId) {
     device_.manager().addMidiInputDeviceCallback({}, this);
     rebuild();  // engine must match the device's actual rate and block size
     device_.start();
+    applyProjectRate();
     return true;
+}
+
+const std::vector<double>& Session::standardSampleRates() {
+    static const std::vector<double> rates{44100, 48000, 88200, 96000, 192000};
+    return rates;
+}
+
+std::vector<double> Session::availableSampleRates() const {
+    if (device_.manager().getCurrentAudioDevice() != nullptr) return device_.availableSampleRates();
+    return standardSampleRates();  // no hardware (tests, simulation): any standard rate
+}
+
+juce::String Session::setSampleRate(double rate) {
+    const auto rates = availableSampleRates();
+    if (std::find(rates.begin(), rates.end(), rate) == rates.end())
+        return JuceAudioDevice::rateLabel(rate) + " isn't available on this audio device.";
+    if (recording_) return "Stop recording before changing the sample rate.";
+    if (device_.manager().getCurrentAudioDevice() != nullptr) {
+        auto err = device_.setSampleRate(rate);
+        if (err.isNotEmpty()) return err;
+        deviceChanged();  // apply now; the later change notification is then a no-op
+    } else {
+        applyDeviceFormat(rate, blockSize_);
+    }
+    if (loaded_ && std::abs(project_.sampleRateHint - sampleRate_) > 0.5) {
+        project_.sampleRateHint = sampleRate_;
+        save();
+    }
+    return {};
+}
+
+void Session::applyProjectRate() {
+    if (!loaded_ || device_.manager().getCurrentAudioDevice() == nullptr) return;
+    const double want = project_.sampleRateHint;
+    if (std::abs(want - sampleRate_) < 0.5) return;
+    auto rates = device_.availableSampleRates();
+    if (std::find(rates.begin(), rates.end(), want) == rates.end()) return;  // play at the device's rate instead
+    if (device_.setSampleRate(want).isEmpty()) deviceChanged();
+}
+
+void Session::deviceChanged() {
+    if (auto* d = device_.manager().getCurrentAudioDevice())
+        applyDeviceFormat(d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
+    else if (onChange) onChange();
+}
+
+void Session::applyDeviceFormat(double rate, int block) {
+    block = std::clamp(block, 64, kScratchFrames);
+    if (rate <= 0) return;
+    if (std::abs(rate - sampleRate_) < 0.5 && block == blockSize_) {
+        if (onChange) onChange();  // e.g. channels changed: refresh input labels
+        return;
+    }
+    // A take can't continue across a rate change (its frames would play back at the wrong speed).
+    if (recording_) stopRecording();
+    const int64_t tick = positionTick();  // keep the playhead at the same musical position
+    sampleRate_ = rate;
+    blockSize_ = block;
+    collector_.reset(sampleRate_);
+    if (loaded_) rebuild();
+    seekToTick(tick);
+    if (onChange) onChange();
 }
 
 void Session::stopAudio() {
@@ -471,6 +538,7 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
     // Capture before rendering: some drivers share input and output buffers.
     if (engine && recordingAudio_.load()) recorder_.capture(ins, numIns, frames, engine->position());
     if (engine && recordingMidi_.load()) midiRecorder_.capture(liveMidi_.data(), numLive, engine->position());
+    if (numOuts < 2) frames = std::min(frames, kScratchFrames);
     float* l = numOuts > 0 ? outs[0] : scratchL_.data();
     float* r = numOuts > 1 ? outs[1] : scratchR_.data();
     const bool running = playing_.load();
