@@ -6,6 +6,14 @@ that CI run. They are **test builds**, not releases:
 - kept for 30 days;
 - not "supported" on any platform yet (see ROADMAP.md).
 
+## Easiest on a Mac: build and install in one step
+If you've cloned the repository (see TESTING_MACOS.md), this updates Ynot, builds it, runs all
+checks, installs it into Applications and opens it. It doesn't need GitHub sign-in, and there's
+no unsigned-app warning:
+```sh
+cd ~/Ynot && git pull && ./tools/install-macos.sh
+```
+
 ## Where to get them
 1. Open the repository's **Actions** tab on GitHub and click the newest green run on the
    `claude/universal-cross-platform-music-mufnfc` branch.
