@@ -8,6 +8,11 @@
 # (brew install cmake). The first run downloads JUCE 8.0.4 (~100 MB) and takes ~5-10 minutes.
 set -u
 cd "$(dirname "$0")/.."
+# Find tools installed by Homebrew or pip even if the shell's PATH wasn't set up for them.
+for d in /opt/homebrew/bin /usr/local/bin "$HOME"/Library/Python/3.*/bin; do
+    [ -d "$d" ] && PATH="$PATH:$d"
+done
+export PATH
 REPORT="$PWD/ynot-macos-report.txt"
 BUILD="$PWD/build-macos"
 : > "$REPORT"
@@ -27,7 +32,12 @@ log "Clang:   $(clang --version 2>/dev/null | head -1)"
 log "CMake:   $(cmake --version 2>/dev/null | head -1 || echo 'NOT FOUND - install with: brew install cmake')"
 log "Commit:  $(git rev-parse --short HEAD 2>/dev/null)"
 log "Audio:   $(system_profiler SPAudioDataType 2>/dev/null | grep -E '^        [^ ].*:$' | sed 's/^ *//;s/:$//' | paste -sd ',' -)"
-command -v cmake >/dev/null || { log "CMake is required: brew install cmake"; exit 1; }
+if ! command -v cmake >/dev/null; then
+    log "CMake is required. Install it with:  brew install cmake"
+    log "  (if 'brew' isn't found:  eval \"\$(/opt/homebrew/bin/brew shellenv)\"  then try again,"
+    log "   or without Homebrew:  python3 -m pip install --user cmake)"
+    exit 1
+fi
 
 step "Configure (downloads JUCE on first run)"
 cmake -S . -B "$BUILD" -DYNOT_BUILD_APP=ON -DCMAKE_BUILD_TYPE=Release >>"$REPORT" 2>&1
