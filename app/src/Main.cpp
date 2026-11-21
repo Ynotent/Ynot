@@ -122,6 +122,58 @@ static int runSmokeTest(const juce::File& dir) {
         expect(res.newClips.size() == 1 && noteOk, "MIDI take committed with the played note");
     }
 
+    {   // Punch + quantize: only the punch range is recorded and replaced, notes land on the grid.
+        std::string keysId;
+        for (auto& t : session.project().tracks)
+            if (t.name == "Keys") keysId = t.id;
+        const int64_t bar = session.project().barTicks();
+        auto notesAt = [&](int64_t from, int64_t to) {
+            int n = 0;
+            for (auto& c : session.project().findTrack(keysId)->midiClips)
+                for (auto& note : c.notes)
+                    if (note.tick >= 0 && note.tick < c.lengthTick && c.startTick + note.tick >= from &&
+                        c.startTick + note.tick < to)
+                        ++n;
+            return n;
+        };
+        const int bar1Before = notesAt(0, bar);
+        session.edit([&](ynot::Project& p) { for (auto& t : p.tracks) t.armed = t.id == keysId; });
+        session.setCountInBars(0);
+        session.setPunchRange(bar, 2 * bar);  // bar 2
+        session.setPunchEnabled(true);
+        session.setRecordQuantize("straight-1-16");
+        session.seekToTick(5 * bar);          // punch ignores the playhead
+        std::string err;
+        expect(session.startRecording(err), "punch recording starts (pre-roll from bar 1)");
+        const int block = 256;  // bar = 96000 frames at 120 BPM: punch-in at block 375, out at 750
+        std::vector<float> silence(block), outL(block), outR(block);
+        const float* ins[2] = {silence.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        for (int b = 0; b < 850; ++b) {
+            if (b == 100) session.keyboardState().noteOn(1, 50, 0.8f);   // pre-roll: ignored
+            if (b == 140) session.keyboardState().noteOff(1, 50, 0.f);
+            if (b == 452) session.keyboardState().noteOn(1, 67, 0.8f);   // inside the punch: kept
+            if (b == 520) session.keyboardState().noteOff(1, 67, 0.f);
+            if (b == 790) session.keyboardState().noteOn(1, 72, 0.8f);   // after punch-out: ignored
+            if (b == 820) session.keyboardState().noteOff(1, 72, 0.f);
+            session.processForTesting(ins, 2, outs, 2, block);
+            juce::Thread::sleep(1);
+        }
+        auto res = session.stopRecording();
+        session.setPunchEnabled(false);
+        session.setRecordQuantize({});
+        bool onlyInside = res.newClips.size() == 1, onGrid = false;
+        for (auto& c : session.project().findTrack(keysId)->midiClips)
+            if (!res.newClips.empty() && c.id == res.newClips[0]) {
+                onlyInside &= c.notes.size() == 1 && c.notes[0].pitch == 67;
+                onGrid = !c.notes.empty() && (c.startTick + c.notes[0].tick) % (ynot::kTicksPerQuarter / 4) == 0;
+            }
+        expect(onlyInside, "punch keeps only the note played inside the range");
+        expect(onGrid, "quantize-while-recording puts it on the 1/16 grid");
+        expect(notesAt(0, bar) == bar1Before && notesAt(bar, 2 * bar) == 1,
+               "old notes inside the range are replaced; bar 1 is untouched");
+    }
+
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     expect(ynot::projectToJson(reopened) == ynot::projectToJson(session.project()), "save/reopen is lossless");

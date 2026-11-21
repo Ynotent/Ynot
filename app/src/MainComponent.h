@@ -46,6 +46,9 @@ private:
     void prepareForMobile();
     void showMoreMenu();
     void showCompatibilityDialog();
+    void addQuantizeItems(juce::PopupMenu& m);
+    void addPunchItems(juce::PopupMenu& m);
+    void addTimeSignatureItems(juce::PopupMenu& m);
     ynot::Platform selectedTarget() const;
     bool compact() const { return layout_.layout == ynot::LayoutClass::Compact; }
 
@@ -58,6 +61,7 @@ private:
     // Transport and editing (always visible).
     juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
     juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
+    juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"};
     juce::TextButton undoButton_{"Undo"}, redoButton_{"Redo"}, keysButton_{"Keys"};
     // File/device actions: toolbar on larger screens, "More" menu on phones.
     juce::TextButton newButton_{"New Demo"}, openButton_{"Open"}, saveButton_{"Save"};

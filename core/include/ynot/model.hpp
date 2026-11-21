@@ -6,6 +6,7 @@
 // resampled at playback.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <set>
@@ -129,6 +130,14 @@ struct Project {
     std::vector<const Track*> orderedTracks() const;
 
     double secondsPerTick() const { return 60.0 / tempoBpm / static_cast<double>(kTicksPerQuarter); }
+    // Time signature in ticks. The beat is the denominator's note value (an eighth in 6/8);
+    // tempo stays in quarter notes per minute on every platform.
+    int64_t beatTicks() const {
+        const int den = (timeSigDenominator == 2 || timeSigDenominator == 4 || timeSigDenominator == 8 ||
+                         timeSigDenominator == 16) ? timeSigDenominator : 4;
+        return kTicksPerQuarter * 4 / den;
+    }
+    int64_t barTicks() const { return beatTicks() * std::max(1, timeSigNumerator); }
     int64_t endTick() const;
 };
 

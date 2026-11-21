@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "QuantizeMenus.h"
 #include "ynot/edit.hpp"
 
 namespace ynotapp {
@@ -153,24 +154,40 @@ public:
         auto& th = owner_.theme_;
         g.fillAll(th.surface);
         const auto& p = owner_.session_.project();
+        auto& session = owner_.session_;
+        // Punch range: red band along the bottom of the ruler (dim when punch is off).
+        {
+            const float x0 = static_cast<float>(owner_.tickToX(session.punchIn()));
+            const float x1 = static_cast<float>(owner_.tickToX(session.punchOut()));
+            if (x1 > owner_.laneX0()) {
+                const float l = std::max(x0, static_cast<float>(owner_.laneX0()));
+                g.setColour(th.record.withAlpha(session.punchEnabled() ? 0.85f : 0.25f));
+                g.fillRect(juce::Rectangle<float>(l, static_cast<float>(getHeight() - 7), x1 - l, 7.f));
+            }
+        }
         const int beatsPerBar = std::max(1, p.timeSigNumerator);
-        const double ppb = owner_.pixelsPerBeat_;
-        const int barStep = ppb * beatsPerBar < 40 ? 4 : 1;  // thin out labels when zoomed out
-        const int firstBeat = std::max(0, static_cast<int>(owner_.scrollBeat_));
-        const int lastBeat = static_cast<int>(owner_.scrollBeat_ + getWidth() / ppb) + 1;
+        const int64_t beatTicks = p.beatTicks();
+        const double beatPx = owner_.pixelsPerBeat_ * static_cast<double>(beatTicks) / ynot::kTicksPerQuarter;
+        const int barStep = beatPx * beatsPerBar < 40 ? 4 : 1;  // thin out labels when zoomed out
+        const int64_t firstBeat = std::max<int64_t>(0, owner_.xToTick(owner_.laneX0()) / beatTicks);
+        const int64_t lastBeat = owner_.xToTick(getWidth()) / beatTicks + 1;
         g.setFont(juce::FontOptions(th.bodySize - 1.f));
-        for (int b = firstBeat; b <= lastBeat; ++b) {
-            const float x = static_cast<float>(owner_.tickToX(static_cast<int64_t>(b) * ynot::kTicksPerQuarter));
+        for (int64_t b = firstBeat; b <= lastBeat; ++b) {
+            const float x = static_cast<float>(owner_.tickToX(b * beatTicks));
             if (x < owner_.laneX0()) continue;
             const bool bar = b % beatsPerBar == 0;
-            if (!bar && ppb < 14) continue;
+            if (!bar && beatPx < 10) continue;
             g.setColour(bar ? th.textMuted : th.border);
-            g.drawVerticalLine(static_cast<int>(x), bar ? 4.f : 18.f, static_cast<float>(getHeight()));
+            g.drawVerticalLine(static_cast<int>(x), bar ? 4.f : 16.f, static_cast<float>(getHeight() - 8));
             if (bar && (b / beatsPerBar) % barStep == 0)
-                g.drawText(juce::String(b / beatsPerBar + 1), static_cast<int>(x) + 4, 2, 40, 16,
+                g.drawText(juce::String(b / beatsPerBar + 1), static_cast<int>(x) + 4, 2, 40, 14,
                            juce::Justification::left);
         }
-        const float px = static_cast<float>(owner_.tickToX(owner_.session_.positionTick()));
+        // Time signature at the left edge.
+        g.setColour(th.textMuted);
+        g.drawText(juce::String(p.timeSigNumerator) + "/" + juce::String(p.timeSigDenominator),
+                   owner_.laneX0() - 44, 2, 40, 14, juce::Justification::right);
+        const float px = static_cast<float>(owner_.tickToX(session.positionTick()));
         if (px >= owner_.laneX0()) {
             g.setColour(th.accent);
             juce::Path tri;
@@ -179,16 +196,29 @@ public:
         }
     }
 
-    void mouseDown(const juce::MouseEvent& e) override { seek(e); }
-    void mouseDrag(const juce::MouseEvent& e) override { seek(e); }
+    // Click/drag: move the playhead. Shift+drag: set the punch range (and turn punch on).
+    void mouseDown(const juce::MouseEvent& e) override {
+        punchDrag_ = e.mods.isShiftDown();
+        if (punchDrag_) punchAnchor_ = snapped(e.x);
+        else seek(e);
+    }
+    void mouseDrag(const juce::MouseEvent& e) override {
+        if (!punchDrag_) { seek(e); return; }
+        owner_.session_.setPunchRange(punchAnchor_, snapped(e.x));
+        owner_.session_.setPunchEnabled(true);
+        owner_.repaint();
+    }
 
 private:
+    int64_t snapped(int x) const { return ynot::snapTick(owner_.xToTick(x), owner_.gridTicks()); }
     void seek(const juce::MouseEvent& e) {
         if (e.x < owner_.laneX0()) return;
-        owner_.session_.seekToTick(ynot::snapTick(owner_.xToTick(e.x), owner_.gridTicks()));
+        owner_.session_.seekToTick(snapped(e.x));
         owner_.repaint();
     }
     ArrangeView& owner_;
+    bool punchDrag_ = false;
+    int64_t punchAnchor_ = 0;
 };
 
 // ============================================================== lanes
@@ -252,15 +282,24 @@ public:
             g.fillRect(lane);
             g.saveState();
             g.reduceClipRegion(lane);
-            // Grid.
-            const double ppb = owner_.pixelsPerBeat_;
-            const int firstBeat = std::max(0, static_cast<int>(owner_.scrollBeat_));
-            const int lastBeat = static_cast<int>(owner_.scrollBeat_ + lane.getWidth() / ppb) + 1;
-            for (int b = firstBeat; b <= lastBeat; ++b) {
-                if (b % beatsPerBar != 0 && ppb < 14) continue;
+            // Grid: beats and bars of the project's time signature.
+            const int64_t beatTicks = p.beatTicks();
+            const double beatPx = owner_.pixelsPerBeat_ * static_cast<double>(beatTicks) / ynot::kTicksPerQuarter;
+            const int64_t firstBeat = std::max<int64_t>(0, owner_.xToTick(lane.getX()) / beatTicks);
+            const int64_t lastBeat = owner_.xToTick(lane.getRight()) / beatTicks + 1;
+            for (int64_t b = firstBeat; b <= lastBeat; ++b) {
+                if (b % beatsPerBar != 0 && beatPx < 10) continue;
                 g.setColour(b % beatsPerBar == 0 ? th.border : th.border.withAlpha(0.4f));
-                g.drawVerticalLine(static_cast<int>(owner_.tickToX(static_cast<int64_t>(b) * ynot::kTicksPerQuarter)),
+                g.drawVerticalLine(static_cast<int>(owner_.tickToX(b * beatTicks)),
                                    static_cast<float>(lane.getY()), static_cast<float>(lane.getBottom()));
+            }
+            // Punch range: faint red wash on armed tracks so you can see what will be replaced.
+            if (owner_.session_.punchEnabled() && row.track->armed) {
+                const float px0 = static_cast<float>(owner_.tickToX(owner_.session_.punchIn()));
+                const float px1 = static_cast<float>(owner_.tickToX(owner_.session_.punchOut()));
+                g.setColour(th.record.withAlpha(0.08f));
+                g.fillRect(juce::Rectangle<float>(px0, static_cast<float>(lane.getY()), px1 - px0,
+                                                  static_cast<float>(lane.getHeight())));
             }
             const auto color = Theme::hex(row.track->color);
             for (auto& c : row.track->audioClips)
@@ -270,7 +309,8 @@ public:
             // Recording in progress: a red region grows from the record point to the playhead.
             if (row.track->armed && owner_.session_.isRecording()) {
                 const float x0 = static_cast<float>(owner_.tickToX(owner_.session_.recordStartTick()));
-                const float x1 = static_cast<float>(owner_.tickToX(owner_.session_.positionTick()));
+                const float x1 = static_cast<float>(owner_.tickToX(
+                    std::min(owner_.session_.positionTick(), owner_.session_.recordEndTick())));
                 if (x1 > x0) {
                     juce::Rectangle<float> rr(x0, static_cast<float>(lane.getY() + 3), x1 - x0,
                                               static_cast<float>(lane.getHeight() - 6));
@@ -555,6 +595,16 @@ private:
         });
         m.addItem("Split at playhead", [this] { owner_.splitSelectedAtPlayhead(); });
         m.addSeparator();
+        if (!c.audio)
+            m.addSubMenu("Quantize", quantizePresetMenu({}, [this, c](const std::string& id) {
+                owner_.session_.quantizeClip(c.trackId, c.clipId, id);
+            }, false));
+        m.addItem("Set punch range to this clip", [this, c] {
+            owner_.session_.setPunchRange(c.startTick, c.startTick + c.lengthTick);
+            owner_.session_.setPunchEnabled(true);
+            owner_.repaint();
+        });
+        m.addSeparator();
         m.addItem("Delete", [this] { owner_.deleteSelected(); });
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
             juce::Rectangle<int>(1, 1).withPosition(localPointToGlobal(at.toInt()))));
@@ -637,7 +687,7 @@ int64_t ArrangeView::gridTicks() const {
         const double px = pixelsPerBeat_ / static_cast<double>(div);
         if (px >= 12) return ynot::kTicksPerQuarter / div;
     }
-    return ynot::kTicksPerQuarter * std::max(1, session_.project().timeSigNumerator);  // bars
+    return session_.project().barTicks();  // bars
 }
 
 void ArrangeView::zoomAround(double x, double factor) {
@@ -720,6 +770,11 @@ bool ArrangeView::splitSelectedAtPlayhead() {
     const int64_t at = session_.positionTick();
     session_.edit([&](ynot::Project& p) { ok = ynot::splitClip(p, sel.trackId, sel.clipId, at).has_value(); });
     return ok;
+}
+
+bool ArrangeView::selectedIsMidi() const {
+    auto span = ynot::findClip(session_.project(), selected_.trackId, selected_.clipId);
+    return span && !span->audio;
 }
 
 bool ArrangeView::deleteSelected() {

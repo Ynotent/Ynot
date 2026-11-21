@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include "QuantizeMenus.h"
+
 namespace ynotapp {
 
 std::optional<ynot::Platform> MainComponent::layoutPlatformOverride;
@@ -40,13 +42,29 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
 
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
-                    &moreButton_})
+                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_})
         addAndMakeVisible(*b);
+    punchButton_.setColour(juce::TextButton::buttonOnColourId, theme_.record);
+    quantizeButton_.onClick = [this] {
+        juce::PopupMenu m;
+        addQuantizeItems(m);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(quantizeButton_));
+    };
+    punchButton_.onClick = [this] {
+        juce::PopupMenu m;
+        addPunchItems(m);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(punchButton_));
+    };
+    timeSigButton_.onClick = [this] {
+        juce::PopupMenu m;
+        addTimeSignatureItems(m);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(timeSigButton_));
+    };
     addChildComponent(keyboard_);
     // Clicking a button must not steal keyboard focus, or musical typing stops after pressing R/Record.
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
-                    &moreButton_, &prepareButton_, &compatSummary_})
+                    &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_})
         b->setMouseClickGrabsKeyboardFocus(false);
     // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
     // (play/stop) and Return (to start) still work while the keyboard has focus.
@@ -114,9 +132,10 @@ void MainComponent::resized() {
     std::vector<juce::TextButton*> toolbar{&playButton_, &recordButton_, &clickButton_};
     countInButton_.setVisible(!compact());
     monitorButton_.setVisible(!compact());
+    for (auto* b : {&quantizeButton_, &punchButton_, &timeSigButton_}) b->setVisible(!compact());
     if (!compact()) {
-        toolbar.push_back(&countInButton_);
-        toolbar.push_back(&monitorButton_);
+        for (auto* b : {&countInButton_, &monitorButton_, &punchButton_, &quantizeButton_, &timeSigButton_})
+            toolbar.push_back(b);
     }
     for (auto* b : {&keysButton_, &undoButton_, &redoButton_}) toolbar.push_back(b);
     for (auto* b : {&newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_}) {
@@ -245,6 +264,18 @@ void MainComponent::refresh() {
     recordButton_.setToggleState(session_.isRecording(), juce::dontSendNotification);
     recordButton_.setButtonText(session_.isRecording() ? "Stop Rec" : "Record");
     undoButton_.setEnabled(session_.canUndo() && !session_.isRecording());
+    punchButton_.setToggleState(session_.punchEnabled(), juce::dontSendNotification);
+    if (session_.hasProject())
+        timeSigButton_.setButtonText(juce::String(session_.project().timeSigNumerator) + "/" +
+                                     juce::String(session_.project().timeSigDenominator));
+    {
+        const auto* preset = ynot::findQuantizePreset(session_.recordQuantizeId());
+        quantizeButton_.setButtonText(preset ? "Q: " + juce::String(ynot::gridName(preset->settings.gridTicks)) +
+                                                   (preset->settings.swingPercent > 50.0
+                                                        ? " " + juce::String(static_cast<int>(preset->settings.swingPercent)) + "%"
+                                                        : juce::String())
+                                             : juce::String("Quantize"));
+    }
     redoButton_.setEnabled(session_.canRedo() && !session_.isRecording());
     arrange_.refresh();
     refreshCompatibility();
@@ -326,6 +357,15 @@ void MainComponent::showMoreMenu() {
         session_.setMonitoring(!session_.monitoring());
         monitorButton_.setToggleState(session_.monitoring(), juce::dontSendNotification);
     });
+    {
+        juce::PopupMenu q, punch, ts;
+        addQuantizeItems(q);
+        addPunchItems(punch);
+        addTimeSignatureItems(ts);
+        m.addSubMenu("Quantize", q);
+        m.addSubMenu("Punch recording", punch);
+        m.addSubMenu("Time signature", ts);
+    }
     m.addSeparator();
     m.addItem("Split clip at playhead", arrange_.hasSelection(), false, [this] { arrange_.splitSelectedAtPlayhead(); });
     m.addItem("Delete clip", arrange_.hasSelection(), false, [this] { arrange_.deleteSelected(); });
@@ -335,6 +375,54 @@ void MainComponent::showMoreMenu() {
     m.addItem("Audio settings...", [this] { showAudioSettings(); });
     if (canScanPlugins()) m.addItem("Scan plugins", [this] { scanPlugins(); });
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(moreButton_));
+}
+
+void MainComponent::addQuantizeItems(juce::PopupMenu& m) {
+    m.addSubMenu("While recording MIDI", quantizePresetMenu(session_.recordQuantizeId(), [this](const std::string& id) {
+        session_.setRecordQuantize(id);
+        refresh();
+    }, true));
+    const bool midiSelected = arrange_.hasSelection() && arrange_.selectedIsMidi();
+    m.addSubMenu("Quantize selected clip", quantizePresetMenu({}, [this](const std::string& id) {
+        session_.quantizeClip(arrange_.selectedTrackId(), arrange_.selectedClipId(), id);
+    }, false), midiSelected);
+    m.addSubMenu("Strength", strengthMenu(session_.quantizeStrength(), [this](double s) {
+        session_.setQuantizeStrength(s);
+    }));
+}
+
+void MainComponent::addPunchItems(juce::PopupMenu& m) {
+    m.addItem("Punch recording", true, session_.punchEnabled(), [this] {
+        session_.setPunchEnabled(!session_.punchEnabled());
+        refresh();
+    });
+    m.addSeparator();
+    m.addItem("Set punch in at playhead", [this] {
+        session_.setPunchRange(session_.positionTick(), std::max(session_.punchOut(), session_.positionTick() + 1));
+        refresh();
+    });
+    m.addItem("Set punch out at playhead", [this] {
+        session_.setPunchRange(std::min(session_.punchIn(), session_.positionTick()), session_.positionTick());
+        refresh();
+    });
+    m.addItem("Punch range = selected clip", arrange_.hasSelection(), false, [this] {
+        if (auto span = ynot::findClip(session_.project(), arrange_.selectedTrackId(), arrange_.selectedClipId())) {
+            session_.setPunchRange(span->startTick, span->startTick + span->lengthTick);
+            session_.setPunchEnabled(true);
+            refresh();
+        }
+    });
+    m.addSeparator();
+    m.addItem("Tip: Shift+drag in the ruler to set the range", false, false, [] {});
+}
+
+void MainComponent::addTimeSignatureItems(juce::PopupMenu& m) {
+    if (!session_.hasProject()) return;
+    m = timeSignatureMenu(session_.project().timeSigNumerator, session_.project().timeSigDenominator,
+                          [this](int n, int d) {
+                              session_.setTimeSignature(n, d);
+                              refresh();
+                          });
 }
 
 void MainComponent::showCompatibilityDialog() {

@@ -135,6 +135,7 @@ private:
     std::atomic<bool> metronome_{false};
     std::atomic<int64_t> clickUntil_{std::numeric_limits<int64_t>::min()};
     int beatsPerBar_ = 4;
+    int64_t beatTicks_ = kTicksPerQuarter;
     int clickRemaining_ = 0;
     double clickPhase_ = 0, clickInc_ = 0;
     void renderClick(float* left, float* right, int frames, int64_t blockStart);

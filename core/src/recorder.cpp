@@ -99,14 +99,17 @@ bool Recorder::start(const Config& cfg) {
 
 void Recorder::capture(const float* const* inputs, int numInputs, int frames, int64_t engineFrame) {
     if (!recording_.load(std::memory_order_acquire)) return;
-    // Skip the count-in: only input at or after startAtFrame is recorded.
-    if (engineFrame + frames <= cfg_.startAtFrame) return;
+    // Only input inside [startAtFrame, stopAtFrame) is recorded: skips the count-in/pre-roll
+    // and, for punch recording, everything after the punch-out point.
+    if (engineFrame + frames <= cfg_.startAtFrame || engineFrame >= cfg_.stopAtFrame) return;
     const int skip = engineFrame < cfg_.startAtFrame ? static_cast<int>(cfg_.startAtFrame - engineFrame) : 0;
+    const int end = engineFrame + frames > cfg_.stopAtFrame ? static_cast<int>(cfg_.stopAtFrame - engineFrame) : frames;
+    if (end <= skip) return;
     int64_t expected = -1;
     startFrame_.compare_exchange_strong(expected, engineFrame + skip);
-    captured_.fetch_add(frames - skip, std::memory_order_relaxed);
-    for (int done = skip; done < frames;) {
-        const int n = std::min(frames - done, cfg_.maxBlock);
+    captured_.fetch_add(end - skip, std::memory_order_relaxed);
+    for (int done = skip; done < end;) {
+        const int n = std::min(end - done, cfg_.maxBlock);
         for (auto& lp : lanes_) {
             Lane& lane = *lp;
             float* dst = lane.interleave.data();

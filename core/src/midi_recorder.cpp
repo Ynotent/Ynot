@@ -8,12 +8,13 @@
 
 namespace ynot {
 
-void MidiTakeRecorder::start(int64_t startAtFrame, size_t capacity) {
+void MidiTakeRecorder::start(int64_t startAtFrame, int64_t stopAtFrame, size_t capacity) {
     recording_ = false;
     events_.assign(capacity, TimedMidiEvent{0, false, 0, 0});
     count_ = 0;
     dropped_ = 0;
     startAt_ = startAtFrame;
+    stopAt_ = stopAtFrame;
     recording_.store(true, std::memory_order_release);
 }
 
@@ -24,7 +25,9 @@ void MidiTakeRecorder::capture(const MidiEvent* events, int numEvents, int64_t b
         const int64_t frame = blockStartFrame + events[i].frameOffset;
         // Note-offs during the count-in still matter if the note continues into the take,
         // but a note that starts in the count-in isn't part of it, so drop both kinds there.
-        if (frame < startAt_) continue;
+        // Note-offs after punch-out are kept so notes played inside the range get their ends;
+        // buildMidiClip trims them to the clip.
+        if (frame < startAt_ || (frame >= stopAt_ && events[i].noteOn)) continue;
         if (n >= events_.size()) {
             dropped_.fetch_add(1, std::memory_order_relaxed);
             continue;
@@ -45,7 +48,7 @@ std::vector<TimedMidiEvent> MidiTakeRecorder::finish() {
 
 std::optional<MidiClip> buildMidiClip(const Project& p, const std::vector<TimedMidiEvent>& events,
                                       int64_t startFrame, int64_t stopFrame, double sampleRate,
-                                      int64_t quantizeTicks) {
+                                      const QuantizeSettings* quantize) {
     const int64_t clipStart = frameToTick(p, startFrame, sampleRate);
     const int64_t clipEnd = std::max(clipStart + kMinClipTicks, frameToTick(p, stopFrame, sampleRate));
     MidiClip clip;
@@ -57,9 +60,8 @@ std::optional<MidiClip> buildMidiClip(const Project& p, const std::vector<TimedM
     auto close = [&](int pitch, int64_t offTick) {
         auto it = held.find(pitch);
         if (it == held.end()) return;
-        int64_t on = it->second.first;
+        const int64_t on = it->second.first;
         const int64_t length = std::max<int64_t>(1, offTick - on);
-        if (quantizeTicks > 0) on = std::max(clipStart, snapTick(on, quantizeTicks));
         if (on < clipEnd)
             clip.notes.push_back({on - clipStart, std::min(length, clipEnd - on), pitch, it->second.second});
         held.erase(it);
@@ -78,6 +80,7 @@ std::optional<MidiClip> buildMidiClip(const Project& p, const std::vector<TimedM
     }
     while (!held.empty()) close(held.begin()->first, clipEnd);  // still held at stop
     if (clip.notes.empty()) return std::nullopt;
+    if (quantize) quantizeClip(clip, *quantize);
     std::sort(clip.notes.begin(), clip.notes.end(), [](const MidiNote& a, const MidiNote& b) {
         return a.tick != b.tick ? a.tick < b.tick : a.pitch < b.pitch;
     });

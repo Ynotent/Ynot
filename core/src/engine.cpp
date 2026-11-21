@@ -197,6 +197,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
     issues_.clear();
     secondsPerTick_ = project.secondsPerTick();
     beatsPerBar_ = std::max(1, project.timeSigNumerator);
+    beatTicks_ = project.beatTicks();
     clickRemaining_ = 0;
     scratchL_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
     scratchR_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
@@ -440,7 +441,7 @@ void Engine::process(float* left, float* right, int frames, const float* const* 
 
 void Engine::renderClick(float* left, float* right, int frames, int64_t blockStart) {
     const double sr = opts_.sampleRate;
-    const double framesPerBeat = static_cast<double>(kTicksPerQuarter) * secondsPerTick_ * sr;
+    const double framesPerBeat = static_cast<double>(beatTicks_) * secondsPerTick_ * sr;  // time-signature beat
     const int clickLen = static_cast<int>(0.03 * sr);  // 30 ms
     // First beat at or after the block start.
     auto beat = static_cast<int64_t>(std::ceil(static_cast<double>(blockStart) / framesPerBeat));

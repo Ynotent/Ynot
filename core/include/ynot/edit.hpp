@@ -37,6 +37,10 @@ std::optional<std::string> splitClip(Project& p, const std::string& trackId, con
                                      int64_t atTick);
 bool deleteClip(Project& p, const std::string& trackId, const std::string& clipId);
 
+// MIDI punch-in: removes notes that start inside [fromTick, toTick) from the track's
+// MIDI clips (notes outside the range are untouched). Returns how many were removed.
+int eraseNotesInRange(Track& track, int64_t fromTick, int64_t toTick);
+
 // Clip geometry independent of kind, for UIs.
 struct ClipSpan {
     std::string trackId, clipId;

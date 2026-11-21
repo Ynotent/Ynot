@@ -96,6 +96,25 @@ Done so far (built and tested on the Linux dev host only):
   - On phones the keyboard has finger-sized keys, and Count-in/Monitor move into "More" so the
     toolbar stays at two rows.
 
+- **Quantize, swing and time signatures** (core `quantize.hpp`, identical on every platform):
+  - Grids from 1/1 to 1/32 plus 1/4T, 1/8T and 1/16T triplets.
+  - Drum-machine swing (50–75% on the second step of each pair); strength 25–100%.
+  - Presets: straight, triplet, MPC-style sampler swing (54/58/62/66/71/75% on 16ths, 58/66% on
+    8ths), analog drum-machine shuffle (light/medium/heavy) and vintage drum-machine feels.
+    Preset names describe a style; the swing values are approximations, not emulations of any
+    product's timing.
+  - Applies while recording MIDI, or to an existing clip (undoable).
+  - Time signatures 4/4, 3/4, 2/4, 5/4, 7/4, 6/8, 7/8, 9/8 and 12/8 drive the ruler, grid,
+    click (beat = denominator note, accent on the downbeat), count-in and quantize bars.
+    Tempo stays in quarter-note BPM.
+- **Punch recording:**
+  - Set the punch range by Shift+dragging in the ruler, from the playhead, or from a clip.
+  - Record pre-rolls at least one bar and captures only between the in and out points.
+  - Audio replaces just that part of the old take (latency-compensated at the out point); MIDI
+    replaces only the notes inside the range.
+  - Found while testing: a pending playhead seek could override the pre-roll position, so
+    engine rebuilds now discard stale seeks.
+
 Still to do:
 - Build and run on a real Mac; out-of-process plugin hosting and scanning; plugin editor windows.
 - Loop/cycle recording with take lanes; count-in length choice (currently 1 bar).

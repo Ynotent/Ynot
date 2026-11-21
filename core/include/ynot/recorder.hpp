@@ -60,6 +60,8 @@ public:
         double ringSeconds = 4.0;  // headroom if the drain thread stalls
         // Input before this engine frame is ignored (count-in / pre-roll).
         int64_t startAtFrame = std::numeric_limits<int64_t>::min();
+        // Input at or after this engine frame is ignored (punch-out).
+        int64_t stopAtFrame = std::numeric_limits<int64_t>::max();
     };
 
     Recorder();

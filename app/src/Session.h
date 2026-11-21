@@ -70,6 +70,26 @@ public:
     bool isRecording() const { return recording_.load(); }
     double recordingSeconds() const;
     int64_t recordStartTick() const { return ynot::frameToTick(project_, recordStart_, sampleRate_); }
+    int64_t recordEndTick() const {
+        return recordEnd_ == std::numeric_limits<int64_t>::max() ? std::numeric_limits<int64_t>::max()
+                                                                  : ynot::frameToTick(project_, recordEnd_, sampleRate_);
+    }
+
+    // Quantize (device/user preference, not stored in the project).
+    void setRecordQuantize(const std::string& presetId);  // "" = off
+    const std::string& recordQuantizeId() const { return recordQuantizeId_; }
+    void setQuantizeStrength(double s) { quantizeStrength_ = std::clamp(s, 0.0, 1.0); }
+    double quantizeStrength() const { return quantizeStrength_; }
+    bool quantizeClip(const std::string& trackId, const std::string& clipId, const std::string& presetId);
+    // Time signature (stored in the project; undoable).
+    void setTimeSignature(int numerator, int denominator);
+
+    // Punch recording: with punch on, Record pre-rolls a bar and records only between in and out.
+    void setPunchEnabled(bool on) { punchEnabled_ = on; if (onChange) onChange(); }
+    bool punchEnabled() const { return punchEnabled_; }
+    void setPunchRange(int64_t inTick, int64_t outTick);
+    int64_t punchIn() const { return punchIn_; }
+    int64_t punchOut() const { return punchOut_; }
     int numInputChannels() const;
     std::vector<int> inputFor(const std::string& trackId) const;
     void cycleInput(const std::string& trackId);
@@ -143,6 +163,15 @@ private:
     ynot::MidiTakeRecorder midiRecorder_;
     std::atomic<bool> recordingAudio_{false}, recordingMidi_{false};
     int64_t recordStart_ = 0;
+    int64_t recordEnd_ = std::numeric_limits<int64_t>::max();
+    const ynot::QuantizeSettings* recordQuantize();
+    std::string recordQuantizeId_;
+    ynot::QuantizeSettings recordQuantizeSettings_;
+    double quantizeStrength_ = 1.0;
+    bool punchEnabled_ = false;
+    bool punchActive_ = false;
+    int64_t punchIn_ = ynot::kTicksPerQuarter * 4;   // bar 2
+    int64_t punchOut_ = ynot::kTicksPerQuarter * 8;  // bar 3
     static constexpr int64_t kNoSeek = std::numeric_limits<int64_t>::min();
     std::atomic<int64_t> pendingSeek_{kNoSeek};
     int simulatedInputs_ = 0;

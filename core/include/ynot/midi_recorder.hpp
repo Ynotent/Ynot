@@ -15,6 +15,7 @@
 
 #include "ynot/engine.hpp"
 #include "ynot/model.hpp"
+#include "ynot/quantize.hpp"
 
 namespace ynot {
 
@@ -27,8 +28,9 @@ struct TimedMidiEvent {
 
 class MidiTakeRecorder {
 public:
-    // Message thread. Events before `startAtFrame` (count-in) are ignored.
-    void start(int64_t startAtFrame, size_t capacity = 1 << 16);
+    // Message thread. Only events in [startAtFrame, stopAtFrame) are kept (count-in / punch).
+    void start(int64_t startAtFrame, int64_t stopAtFrame = std::numeric_limits<int64_t>::max(),
+               size_t capacity = 1 << 16);
     // Audio thread: events with offsets relative to `blockStartFrame`. No allocation.
     void capture(const MidiEvent* events, int numEvents, int64_t blockStartFrame);
     // Message thread, after the audio thread has stopped calling capture().
@@ -43,13 +45,15 @@ private:
     std::atomic<bool> recording_{false};
     std::atomic<int64_t> dropped_{0};
     int64_t startAt_ = 0;
+    int64_t stopAt_ = std::numeric_limits<int64_t>::max();
 };
 
 // Pairs note-ons with note-offs and builds a clip spanning [startFrame, stopFrame).
-// Notes still held at stop end at the stop point. `quantizeTicks` > 0 snaps note
-// starts to that grid (lengths kept). Returns nullopt if no notes were played.
+// Notes still held at stop end at the stop point. With `quantize`, notes are
+// quantized as they're recorded (grid, swing, strength; see quantize.hpp).
+// Returns nullopt if no notes were played.
 std::optional<MidiClip> buildMidiClip(const Project& p, const std::vector<TimedMidiEvent>& events,
                                       int64_t startFrame, int64_t stopFrame, double sampleRate,
-                                      int64_t quantizeTicks = 0);
+                                      const QuantizeSettings* quantize = nullptr);
 
 }  // namespace ynot

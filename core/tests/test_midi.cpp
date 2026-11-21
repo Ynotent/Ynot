@@ -65,7 +65,9 @@ TEST("midi: re-struck notes, stray note-offs, quantize and empty takes") {
 
     // 1/4-beat grid: a note played 30 ms late snaps back onto the beat.
     std::vector<TimedMidiEvent> late = {{24000 + 1440, true, 62, 100}, {30000, false, 62, 0}};
-    auto q = buildMidiClip(p, late, 0, 48000, kSr, kBeat / 4);
+    QuantizeSettings sixteenths;
+    sixteenths.gridTicks = kBeat / 4;
+    auto q = buildMidiClip(p, late, 0, 48000, kSr, &sixteenths);
     CHECK(q && q->notes[0].tick == kBeat);
 
     CHECK(!buildMidiClip(p, {}, 0, 48000, kSr).has_value());
@@ -73,7 +75,7 @@ TEST("midi: re-struck notes, stray note-offs, quantize and empty takes") {
 
 TEST("midi: recorder never allocates past capacity; overflow is counted") {
     MidiTakeRecorder rec;
-    rec.start(0, 4);
+    rec.start(0, std::numeric_limits<int64_t>::max(), 4);
     MidiEvent burst[6];
     for (int i = 0; i < 6; ++i) burst[i] = {i, true, 60 + i, 100};
     rec.capture(burst, 6, 0);

@@ -32,6 +32,10 @@ public:
     // Commands also reachable from keyboard / menus / toolbar.
     bool splitSelectedAtPlayhead();
     bool deleteSelected();
+    // Selected clip (empty ids if none) and whether it's MIDI, for toolbar/menu commands.
+    std::string selectedTrackId() const { return selected_.trackId; }
+    std::string selectedClipId() const { return selected_.clipId; }
+    bool selectedIsMidi() const;
     bool hasSelection() const { return !selected_.clipId.empty(); }
     // While the on-screen keyboard is open, letter keys play notes instead of editing.
     void setMusicalTyping(bool on) { musicalTyping_ = on; }

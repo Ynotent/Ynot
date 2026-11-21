@@ -167,6 +167,23 @@ bool deleteClip(Project& p, const std::string& trackId, const std::string& clipI
     return removed;
 }
 
+int eraseNotesInRange(Track& track, int64_t fromTick, int64_t toTick) {
+    int removed = 0;
+    for (auto& c : track.midiClips) {
+        auto& notes = c.notes;
+        const auto before = notes.size();
+        notes.erase(std::remove_if(notes.begin(), notes.end(),
+                                   [&](const MidiNote& n) {
+                                       if (n.tick < 0 || n.tick >= c.lengthTick) return false;  // hidden: keep
+                                       const int64_t abs = c.startTick + n.tick;
+                                       return abs >= fromTick && abs < toTick;
+                                   }),
+                    notes.end());
+        removed += static_cast<int>(before - notes.size());
+    }
+    return removed;
+}
+
 void History::record(const Project& before) {
     undo_.push_back(projectToJson(before));
     if (undo_.size() > limit_) undo_.erase(undo_.begin());

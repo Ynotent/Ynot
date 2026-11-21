@@ -119,6 +119,7 @@ void Session::rebuild() {
         }
     liveMidiActive_ = liveMidi;
     fresh->prepare(project_, *media_, host_, opts);
+    pendingSeek_ = kNoSeek;  // position_ already holds the latest seek; a stale one must not override it
     fresh->seek(position_.load());
     fresh->setMetronome(metronomeOn_.load());
     fresh->setForcedClickUntil(forcedClickUntil_);
@@ -230,22 +231,33 @@ bool Session::startRecording(std::string& error) {
         error = "The current audio device has no inputs enabled. Choose an input in Audio settings.";
         return false;
     }
-    // Count-in: start the transport early so the performer hears the click,
-    // but only record from the current position.
-    const int64_t recordStart = std::max<int64_t>(0, position_.load());
-    const int64_t countIn = ynot::tickToFrame(project_, int64_t(countInBars_) * project_.timeSigNumerator *
-                                                            ynot::kTicksPerQuarter, sampleRate_);
+    // Count-in / punch pre-roll: start the transport early so the performer hears the lead-up,
+    // but only record from the record point (the playhead, or punch-in).
+    const bool punch = punchEnabled_ && punchOut_ > punchIn_;
+    const int64_t recordStart = punch ? ynot::tickToFrame(project_, punchIn_, sampleRate_)
+                                      : std::max<int64_t>(0, position_.load());
+    const int64_t recordEnd = punch ? ynot::tickToFrame(project_, punchOut_, sampleRate_)
+                                    : std::numeric_limits<int64_t>::max();
+    const int64_t countIn = ynot::tickToFrame(project_, int64_t(countInBars_) * project_.barTicks(), sampleRate_);
+    // Punch always gets at least one bar of pre-roll so you can hear where you're coming in.
+    const int64_t preRoll = punch ? std::max(countIn, ynot::tickToFrame(project_, project_.barTicks(), sampleRate_))
+                                  : countIn;
+    const int latency = device_.manager().getCurrentAudioDevice() ? ynot::recordingOffsetFrames(device_) : 0;
     cfg.startAtFrame = recordStart;
+    // Audio arrives `latency` frames late, so keep capturing that much past punch-out.
+    if (punch) cfg.stopAtFrame = recordEnd + latency;
     if (audioTargets && !recorder_.start(cfg)) {
         error = recorder_.error();
         return false;
     }
-    if (midiTargets) midiRecorder_.start(recordStart);
+    if (midiTargets) midiRecorder_.start(recordStart, recordEnd);
     recordingAudio_ = audioTargets;
     recordingMidi_ = midiTargets;
     recordStart_ = recordStart;
+    recordEnd_ = recordEnd;
+    punchActive_ = punch;
     forcedClickUntil_ = countIn > 0 ? recordStart : std::numeric_limits<int64_t>::min();
-    position_ = recordStart - countIn;
+    position_ = recordStart - preRoll;
     rebuild();  // engine starts at the pre-roll position with the count-in click
     draining_ = audioTargets;
     if (audioTargets) drainThread_ = std::thread([this] {
@@ -269,7 +281,7 @@ Session::RecordResult Session::stopRecording() {
     while (inCallback_.load()) std::this_thread::yield();
     draining_ = false;
     if (drainThread_.joinable()) drainThread_.join();
-    const int64_t stopFrame = position_.load();
+    const int64_t stopFrame = std::min(position_.load(), recordEnd_);  // punch-out ends the take
     auto takes = recordingAudio_ ? recorder_.finish() : std::vector<ynot::RecordedTake>{};
     auto midiEvents = recordingMidi_ ? midiRecorder_.finish() : std::vector<ynot::TimedMidiEvent>{};
     forcedClickUntil_ = std::numeric_limits<int64_t>::min();
@@ -280,8 +292,16 @@ Session::RecordResult Session::stopRecording() {
     history_.record(project_);
     result.newClips = ynot::commitTakes(project_, dir_.getFullPathName().toStdString(), takes, latency);
     if (recordingMidi_) {
+        if (punchActive_ && stopFrame > recordStart_) {
+            // Punch replaces the old notes inside the range (outside is untouched).
+            const int64_t in = ynot::frameToTick(project_, recordStart_, sampleRate_);
+            const int64_t out = ynot::frameToTick(project_, stopFrame, sampleRate_);
+            for (auto& t : project_.tracks)
+                if (t.armed && t.kind == ynot::TrackKind::Instrument) ynot::eraseNotesInRange(t, in, out);
+        }
         // MIDI is timestamped at the engine frame it was played, so no latency offset applies.
-        if (auto clip = ynot::buildMidiClip(project_, midiEvents, recordStart_, stopFrame, sampleRate_)) {
+        const ynot::QuantizeSettings* q = recordQuantize();
+        if (auto clip = ynot::buildMidiClip(project_, midiEvents, recordStart_, stopFrame, sampleRate_, q)) {
             for (auto& t : project_.tracks)
                 if (t.armed && t.kind == ynot::TrackKind::Instrument) {
                     auto c = *clip;
@@ -293,6 +313,8 @@ Session::RecordResult Session::stopRecording() {
         result.droppedMidiEvents = midiRecorder_.droppedEvents();
     }
     recordingAudio_ = recordingMidi_ = false;
+    punchActive_ = false;
+    recordEnd_ = std::numeric_limits<int64_t>::max();
     save();
     rebuild();
     return result;
@@ -312,6 +334,51 @@ int Session::numMidiInputs() const {
     for (auto& d : juce::MidiInput::getAvailableDevices())
         n += device_.manager().isMidiInputDeviceEnabled(d.identifier) ? 1 : 0;
     return n;
+}
+
+// ---------------------------------------------------------------- quantize / time signature / punch
+
+void Session::setRecordQuantize(const std::string& presetId) {
+    recordQuantizeId_ = ynot::findQuantizePreset(presetId) ? presetId : std::string();
+}
+
+const ynot::QuantizeSettings* Session::recordQuantize() {
+    const auto* preset = ynot::findQuantizePreset(recordQuantizeId_);
+    if (!preset) return nullptr;
+    recordQuantizeSettings_ = preset->settings;
+    recordQuantizeSettings_.strength = quantizeStrength_;
+    return &recordQuantizeSettings_;
+}
+
+bool Session::quantizeClip(const std::string& trackId, const std::string& clipId, const std::string& presetId) {
+    const auto* preset = ynot::findQuantizePreset(presetId);
+    if (!preset || !loaded_) return false;
+    auto settings = preset->settings;
+    settings.strength = quantizeStrength_;
+    bool found = false;
+    edit([&](ynot::Project& p) {
+        if (auto* t = p.findTrack(trackId))
+            for (auto& c : t->midiClips)
+                if (c.id == clipId) {
+                    ynot::quantizeClip(c, settings);
+                    found = true;
+                }
+    });
+    return found;
+}
+
+void Session::setTimeSignature(int numerator, int denominator) {
+    edit([&](ynot::Project& p) {
+        p.timeSigNumerator = std::clamp(numerator, 1, 32);
+        p.timeSigDenominator = denominator;
+    });
+}
+
+void Session::setPunchRange(int64_t inTick, int64_t outTick) {
+    if (outTick < inTick) std::swap(inTick, outTick);
+    punchIn_ = std::max<int64_t>(0, inTick);
+    punchOut_ = std::max(punchIn_ + ynot::kMinClipTicks, outTick);
+    if (onChange) onChange();
 }
 
 void Session::setMonitoring(bool on) {

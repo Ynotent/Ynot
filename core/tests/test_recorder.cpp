@@ -316,3 +316,61 @@ TEST("recorder: input during the count-in is not recorded") {
     AudioBuffer got = decodeWav(readFileBytes(takes[0].tempPath));
     CHECK_NEAR(got.samples[0], 0.1, 1e-6);  // first recorded sample is input index 1000
 }
+
+TEST("punch: audio replaces only the punch range of the existing take") {
+    auto dir = th::tempDir("punch-audio");
+    Project p = emptyProject(nullptr);
+    // Existing 2 s take at a constant level of 0.2 on the vocal track.
+    AudioBuffer old;
+    old.sampleRate = 48000;
+    old.channels = 1;
+    old.samples.assign(96000, 0.2f);
+    std::string oldId = addMedia(p, dir, old, "recording").id;
+    p.findTrack("vox")->audioClips = {{"old", oldId, 0, 4 * kTicksPerQuarter, 0, 0.0}};
+
+    // Punch in at beat 1 (24000), out at beat 2 (48000). Transport runs the whole 2 s;
+    // the performer sings a constant 0.7 throughout, but only the range is kept.
+    Recorder rec;
+    Recorder::Config cfg;
+    cfg.targets = {{"vox", {0}}};
+    cfg.packageDir = dir;
+    cfg.startAtFrame = 24000;
+    cfg.stopAtFrame = 48000;
+    CHECK(rec.start(cfg));
+    feed(rec, std::vector<float>(96000, 0.7f), 0);
+    auto takes = rec.finish();
+    CHECK_EQ(takes.size(), size_t(1));
+    CHECK_EQ(takes[0].startFrame, int64_t(24000));
+    CHECK_EQ(takes[0].frames, int64_t(24000));
+    commitTakes(p, dir, takes, 0);
+    CHECK_EQ(p.findTrack("vox")->audioClips.size(), size_t(3));  // old | new | old
+
+    PackageMediaProvider media(dir);
+    BuiltinPluginHost host;
+    AudioBuffer out = renderProject(p, media, host, 48000, 0.0);
+    auto at = [&](int64_t f) { return out.samples[static_cast<size_t>(f * 2)]; };
+    CHECK_NEAR(at(12000), 0.2, 1e-4);  // before punch-in: old take
+    CHECK_NEAR(at(36000), 0.7, 1e-4);  // inside the punch: new take
+    CHECK_NEAR(at(60000), 0.2, 1e-4);  // after punch-out: old take continues
+}
+
+TEST("punch: MIDI replaces notes only inside the range") {
+    Track t;
+    t.id = "k";
+    t.kind = TrackKind::Instrument;
+    const int64_t b = kTicksPerQuarter;
+    t.midiClips = {{"c", 0, 4 * b, {{0, b / 2, 36, 100}, {b, b / 2, 38, 100}, {2 * b, b / 2, 36, 100}, {3 * b, b / 2, 38, 100}}}};
+    CHECK_EQ(eraseNotesInRange(t, b, 3 * b), 2);
+    CHECK_EQ(t.midiClips[0].notes.size(), size_t(2));
+    CHECK_EQ(t.midiClips[0].notes[1].tick, 3 * b);
+
+    // The MIDI recorder ignores new notes after punch-out but keeps their note-offs.
+    MidiTakeRecorder rec;
+    rec.start(24000, 72000);
+    MidiEvent on1{0, true, 40, 100}, off1{0, false, 40, 0}, late{0, true, 41, 100};
+    rec.capture(&on1, 1, 60000);
+    rec.capture(&off1, 1, 80000);  // after punch-out: kept, so the note gets its end
+    rec.capture(&late, 1, 80000);  // new note after punch-out: ignored
+    auto ev = rec.finish();
+    CHECK_EQ(ev.size(), size_t(2));
+}
