@@ -1,0 +1,108 @@
+# Roadmap & platform support status
+
+All four platforms are part of the architecture from the start. They are delivered in
+milestones, and **a platform is only called "supported" after native builds pass CI *and* the
+real-device test matrix for that milestone has been completed and signed off.**
+
+## Current status (Stage 17)
+
+| Platform | Status | What exists |
+|---|---|---|
+| macOS | **Planned** | Shared core; CI job compiles and tests the core on a macOS runner* |
+| Windows | **Planned** | Shared core; CI job compiles and tests the core with MSVC* |
+| iOS / iPadOS | **Planned** | Shared core; CI job cross-compiles the core for iOS* |
+| Android | **Planned** | Shared core; CI job cross-compiles the core with the NDK* |
+
+\* Verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 31/31
+tests pass. The macOS, Windows, iOS and Android CI jobs are defined in
+`.github/workflows/ci.yml` but **have not run yet**. Once they pass, a platform moves to
+`core-compiles`. None of these statuses means the app is usable on that platform.
+
+Status levels match `PlatformStatus` in `core/include/ynot/platform.hpp`:
+`planned → core-compiles → native-shell-builds → real-device-verified`.
+
+## Milestones
+
+Each milestone ends with a gate, and nothing in a later milestone may claim the earlier gate
+was passed if it wasn't.
+
+### M0: Architecture and shared core ✅ (this stage)
+- Architecture, platform capability model, universal project format v1.
+- Audio engine; compatibility, freeze and render; collaboration op-log.
+- Responsive layout rules, entitlements, AI gating.
+- **Gate:** core tests are green on Linux ✅; the four-platform CI matrix is green ⏳.
+
+### M1: macOS alpha (first native shell)
+- Resolve ADR-0002. Build the macOS shell with CoreAudio `AudioDevice` and
+  AU/AUv3/VST3 `PluginHost` (out of process).
+- Features: record, edit, arrange, mix, freeze, open and save `.ynot`.
+- Replace linear resampling with windowed-sinc. Add a recording latency calibration tool.
+- **Real-device gate:**
+  - Apple Silicon (M1 or later) and one Intel Mac.
+  - 3 audio interfaces (USB 2, USB-C, Thunderbolt) and the built-in audio.
+  - 64-sample buffer stable for 1 h with 32 tracks.
+  - Load and freeze tests with 20 popular AU/VST3 plugins.
+
+### M2: Windows alpha
+- Windows shell with ASIO, WASAPI exclusive and shared `AudioDevice`, and VST3 `PluginHost`.
+- **Real-device gate:**
+  - Intel and AMD laptop or desktop.
+  - 3 ASIO interfaces plus one WASAPI-only device; ASIO4ALL not required.
+  - A touchscreen laptop for the Medium layout.
+  - The same plugin and stability suite as M1.
+  - A project round trip between Mac and Windows with byte-identical `project.json`.
+
+### M3: Cloud sync and handoff
+- Accounts, media blob store, project op-log relay (single user, multiple devices), roaming settings.
+- **Gate:**
+  - Start a project on the Mac, continue on Windows, then back again with no data loss.
+  - Offline edits on both sides merge correctly.
+  - Security review and penetration test of the services.
+
+### M4: iOS / iPadOS
+- iOS shell: AVAudioSession, AUv3 hosting, Compact (iPhone) and Expanded (iPad) layouts,
+  Pencil, pointer.
+- "Prepare for iPhone": freeze desktop-only tracks on the Mac before handoff.
+- **Real-device gate:**
+  - iPhone SE (3rd gen), a current iPhone, a base iPad, and an iPad Pro with keyboard and trackpad.
+  - Wired, USB-C interface and Bluetooth routes.
+  - Interruption tests (calls, Siri, alarms).
+  - Desktop-to-iPhone handoff of a project with VST3/AU tracks shows correct warnings and plays
+    the freezes.
+
+### M5: Android
+- Android shell: Oboe/AAudio `AudioDevice`, built-in plugins, Compact and Expanded layouts.
+- AAP evaluation stays behind a feature flag.
+- **Real-device gate:**
+  - At least 8 devices across Pixel, Samsung (phone and tablet), and one mid-range and one
+    low-end device.
+  - Measured round-trip latency recorded for each device.
+  - A USB class-compliant interface.
+  - Handoff tests with all three other platforms.
+
+### M6: Real-time collaboration
+- Relay fan-out, presence, soft-locks during recording, permissions.
+- **Gate:** a live session with four collaborators, one on each platform, for 30 minutes under
+  packet loss and reconnects. All replicas end byte-identical.
+
+### M7: AI features
+- On-device: chord and key detection, vocal tuning.
+- On-device or cloud: stem separation, audio-to-MIDI, mix and mastering assistants.
+- Cloud: text-to-MIDI ideas.
+- **Gate:** each feature is verified on every platform where `aiAvailability()` says it runs.
+
+### M8: Subscriptions on every store
+- StoreKit 2, Play Billing and web checkout, with the server-side entitlement service.
+- **Gate:**
+  - A purchase on each channel unlocks all four platforms.
+  - Refund, grace-period and expiry flows work on each store's sandbox.
+  - Legal review of in-app purchase rules for each launch region.
+
+## Known gaps to fix before any release
+- Linear-interpolation resampler (quality) → windowed-sinc in M1.
+- Constant tempo only → tempo map in format v2.
+- No buses or sends yet → format v2.
+- `Replica::rematerialize()` is O(n) on out-of-order ops. That's fine for sessions; add
+  periodic snapshots in M6.
+- JSON number parsing uses `strtod`. Shells must not change the C locale (`LC_NUMERIC`), or a
+  locale-independent parser has to be substituted.

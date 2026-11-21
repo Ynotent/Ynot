@@ -1,0 +1,426 @@
+#include "ynot/engine.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+
+#include "ynot/project_format.hpp"
+
+namespace ynot {
+
+double dbToGain(double db) { return db <= -144.0 ? 0.0 : std::pow(10.0, db / 20.0); }
+
+namespace {
+constexpr double kPi = 3.14159265358979323846;
+
+double paramOr(const Json& params, const char* key, double def) { return params.getNumber(key, def); }
+
+// --------------------------------------------------------------- builtin synth
+
+class BasicSynth : public PluginProcessor {
+public:
+    BasicSynth(const Json& params, double sr) : sr_(sr) {
+        wave_ = paramOr(params, "wave", 1.0);
+        attack_ = paramOr(params, "attack", 0.005);
+        release_ = paramOr(params, "release", 0.15);
+        level_ = paramOr(params, "level", 0.25);
+    }
+    void process(float* l, float* r, int frames, const MidiEvent* ev, int nev) override {
+        int e = 0;
+        for (int i = 0; i < frames; ++i) {
+            while (e < nev && ev[e].frameOffset <= i) handle(ev[e++]);
+            double s = 0;
+            for (auto& v : voices_) {
+                if (!v.active) continue;
+                double a = v.on ? std::min(1.0, v.env + 1.0 / std::max(1.0, attack_ * sr_))
+                                : v.env - 1.0 / std::max(1.0, release_ * sr_);
+                v.env = a;
+                if (v.env <= 0) { v.active = false; continue; }
+                double osc = wave_ < 0.5 ? std::sin(2 * kPi * v.phase) : 2.0 * v.phase - 1.0;
+                v.phase += v.inc;
+                if (v.phase >= 1.0) v.phase -= 1.0;
+                s += osc * v.env * v.vel;
+            }
+            float out = static_cast<float>(s * level_);
+            l[i] += out;
+            r[i] += out;
+        }
+        while (e < nev) handle(ev[e++]);
+    }
+    void setParameter(const std::string& id, double v) override {
+        if (id == "level") level_ = v;
+        else if (id == "wave") wave_ = v;
+    }
+    void reset() override {
+        for (auto& v : voices_) v = Voice{};
+    }
+
+private:
+    struct Voice {
+        bool active = false, on = false;
+        int pitch = 0;
+        double phase = 0, inc = 0, env = 0, vel = 0;
+    };
+    void handle(const MidiEvent& e) {
+        if (e.noteOn && e.velocity > 0) {
+            Voice* slot = nullptr;
+            for (auto& v : voices_)
+                if (!v.active) { slot = &v; break; }
+            if (!slot) slot = &voices_[0];  // simple voice stealing
+            *slot = Voice{true, true, e.pitch, 0.0,
+                          440.0 * std::pow(2.0, (e.pitch - 69) / 12.0) / sr_, 0.0, e.velocity / 127.0};
+        } else {
+            for (auto& v : voices_)
+                if (v.active && v.on && v.pitch == e.pitch) v.on = false;
+        }
+    }
+    double sr_, wave_, attack_, release_, level_;
+    std::array<Voice, 16> voices_{};
+};
+
+class GainFx : public PluginProcessor {
+public:
+    explicit GainFx(const Json& params) { setDb(paramOr(params, "gainDb", 0.0)); }
+    void process(float* l, float* r, int frames, const MidiEvent*, int) override {
+        for (int i = 0; i < frames; ++i) { l[i] *= g_; r[i] *= g_; }
+    }
+    // normalized 0..1 maps to -60..+12 dB
+    void setParameter(const std::string& id, double v) override {
+        if (id == "gainDb") setDb(-60.0 + v * 72.0);
+    }
+    void reset() override {}
+
+private:
+    void setDb(double db) { g_ = static_cast<float>(dbToGain(db)); }
+    float g_ = 1.0f;
+};
+
+class LowpassFx : public PluginProcessor {
+public:
+    LowpassFx(const Json& params, double sr) : sr_(sr) { setCutoff(paramOr(params, "cutoffHz", 8000)); }
+    void process(float* l, float* r, int frames, const MidiEvent*, int) override {
+        for (int i = 0; i < frames; ++i) {
+            zl_ += a_ * (l[i] - zl_);
+            zr_ += a_ * (r[i] - zr_);
+            l[i] = zl_;
+            r[i] = zr_;
+        }
+    }
+    // normalized 0..1 maps logarithmically to 20 Hz..20 kHz
+    void setParameter(const std::string& id, double v) override {
+        if (id == "cutoffHz") setCutoff(20.0 * std::pow(1000.0, std::clamp(v, 0.0, 1.0)));
+    }
+    void reset() override { zl_ = zr_ = 0; }
+
+private:
+    void setCutoff(double hz) {
+        hz = std::clamp(hz, 20.0, sr_ * 0.45);
+        a_ = static_cast<float>(1.0 - std::exp(-2.0 * kPi * hz / sr_));
+    }
+    double sr_;
+    float a_ = 1, zl_ = 0, zr_ = 0;
+};
+
+}  // namespace
+
+std::vector<std::string> BuiltinPluginHost::builtinIds() {
+    return {kBuiltinSynth, kBuiltinGain, kBuiltinFilter};
+}
+
+bool BuiltinPluginHost::isAvailable(const PluginInstance& p) const {
+    if (p.format != PluginFormat::Builtin) return false;
+    auto ids = builtinIds();
+    return std::find(ids.begin(), ids.end(), p.uid) != ids.end();
+}
+
+std::unique_ptr<PluginProcessor> BuiltinPluginHost::load(const PluginInstance& p, double sr, int) {
+    if (!isAvailable(p)) return nullptr;
+    if (p.uid == kBuiltinSynth) return std::make_unique<BasicSynth>(p.params, sr);
+    if (p.uid == kBuiltinGain) return std::make_unique<GainFx>(p.params);
+    if (p.uid == kBuiltinFilter) return std::make_unique<LowpassFx>(p.params, sr);
+    return nullptr;
+}
+
+const AudioBuffer* PackageMediaProvider::get(const MediaRef& m) {
+    auto it = cache_.find(m.id);
+    if (it != cache_.end()) return &it->second;
+    try {
+        auto [ins, _] = cache_.emplace(m.id, loadMedia(m, dir_));
+        return &ins->second;
+    } catch (...) {
+        return nullptr;  // missing media (e.g. not yet downloaded) is reported by the engine
+    }
+}
+
+// --------------------------------------------------------------- engine
+
+struct Engine::TrackState {
+    std::string id;
+    bool muted = false;
+    double gain = 1.0, pan = 0.0;
+    const AutomationLane* gainLane = nullptr;  // points into `track` copy below
+    const AutomationLane* panLane = nullptr;
+    Track track;  // snapshot
+
+    // Source: either frozen audio, audio clips, or instrument + MIDI.
+    const AudioBuffer* frozenAudio = nullptr;
+    struct ClipSrc {
+        int64_t startFrame, endFrame;
+        double srcOffset, ratio, gain;
+        const AudioBuffer* buf;
+    };
+    std::vector<ClipSrc> clips;
+    std::unique_ptr<PluginProcessor> instrument;
+    struct TimedEvent { int64_t frame; MidiEvent ev; };
+    std::vector<TimedEvent> events;  // sorted
+    size_t eventCursor = 0;
+    std::vector<MidiEvent> blockEvents;
+    std::vector<std::unique_ptr<PluginProcessor>> inserts;
+    struct PluginAuto { PluginProcessor* proc; std::string param; const AutomationLane* lane; };
+    std::vector<PluginAuto> pluginAutomation;
+};
+
+Engine::Engine() = default;
+Engine::~Engine() = default;
+
+void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& host,
+                     const EngineOptions& opts) {
+    opts_ = opts;
+    tracks_.clear();
+    issues_.clear();
+    secondsPerTick_ = project.secondsPerTick();
+    scratchL_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
+    scratchR_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
+    const double sr = opts.sampleRate;
+    auto tickToFrame = [&](int64_t tick) {
+        return static_cast<int64_t>(std::llround(static_cast<double>(tick) * secondsPerTick_ * sr));
+    };
+
+    bool isolate = !opts.isolateTrackPreFader.empty();
+    bool anySolo = false;
+    for (auto& t : project.tracks) anySolo |= t.solo;
+
+    for (const Track* tp : project.orderedTracks()) {
+        if (isolate && tp->id != opts.isolateTrackPreFader) continue;
+        auto ts = std::make_unique<TrackState>();
+        ts->track = *tp;
+        const Track& t = ts->track;
+        ts->id = t.id;
+        ts->muted = !isolate && (t.mute || (anySolo && !t.solo));
+        ts->gain = isolate ? 1.0 : dbToGain(t.gainDb);
+        ts->pan = isolate ? 0.0 : t.pan;
+        if (!isolate) {
+            ts->gainLane = t.lane("track.gainDb");
+            ts->panLane = t.lane("track.pan");
+        }
+
+        // Prefer a valid freeze when the user froze the track.
+        bool useFreeze = false;
+        if (!isolate && t.frozen && t.freeze) {
+            if (auto* m = project.findMedia(t.freeze->mediaId)) {
+                ts->frozenAudio = media.get(*m);
+                useFreeze = ts->frozenAudio != nullptr;
+            }
+            if (!useFreeze)
+                issues_.push_back({t.id, "Frozen audio for '" + t.name +
+                                             "' is missing on this device; trying live processing."});
+            else if (t.freeze->sourceFingerprint != trackFingerprint(t))
+                issues_.push_back({t.id, "Freeze of '" + t.name +
+                                             "' is older than the latest edits; refreeze to update."});
+        }
+        if (useFreeze) {
+            AudioBuffer const* b = ts->frozenAudio;
+            ts->clips.push_back({0, std::numeric_limits<int64_t>::max(), 0.0, b->sampleRate / sr, 1.0, b});
+            tracks_.push_back(std::move(ts));
+            continue;
+        }
+
+        for (auto& c : t.audioClips) {
+            auto* m = project.findMedia(c.mediaId);
+            const AudioBuffer* b = m ? media.get(*m) : nullptr;
+            if (!b) {
+                issues_.push_back({t.id, "Recording for a clip on '" + t.name +
+                                             "' is not available on this device yet (still syncing?)."});
+                continue;
+            }
+            ts->clips.push_back({tickToFrame(c.startTick), tickToFrame(c.startTick + c.lengthTick),
+                                 static_cast<double>(c.sourceOffsetFrames), b->sampleRate / sr,
+                                 dbToGain(c.gainDb), b});
+        }
+
+        if (t.instrument && !t.instrument->bypassed) {
+            ts->instrument = host.load(*t.instrument, sr, opts.maxBlock);
+            if (!ts->instrument)
+                issues_.push_back({t.id, "Instrument '" + t.instrument->name + "' (" +
+                                             toString(t.instrument->format) +
+                                             ") is unavailable on this device; track is silent. "
+                                             "Freeze it on a device that has the plugin."});
+        }
+        for (auto& c : t.midiClips) {
+            int64_t clipEnd = c.startTick + c.lengthTick;
+            for (auto& n : c.notes) {
+                int64_t on = c.startTick + n.tick;
+                if (on >= clipEnd) continue;
+                int64_t off = std::min(on + n.lengthTick, clipEnd);
+                ts->events.push_back({tickToFrame(on), {0, true, n.pitch, n.velocity}});
+                ts->events.push_back({tickToFrame(off), {0, false, n.pitch, 0}});
+            }
+        }
+        std::stable_sort(ts->events.begin(), ts->events.end(),
+                         [](const TrackState::TimedEvent& a, const TrackState::TimedEvent& b) {
+                             if (a.frame != b.frame) return a.frame < b.frame;
+                             return !a.ev.noteOn && b.ev.noteOn;  // note-offs first
+                         });
+        ts->blockEvents.reserve(ts->events.size());
+
+        for (auto& p : t.inserts) {
+            if (p.bypassed) continue;
+            auto proc = host.load(p, sr, opts.maxBlock);
+            if (!proc) {
+                issues_.push_back({t.id, "Effect '" + p.name + "' (" + toString(p.format) +
+                                             ") is unavailable on this device and is bypassed."});
+                continue;
+            }
+            for (auto& lane : t.automation) {
+                std::string prefix = "plugin:" + p.id + ":";
+                if (lane.target.rfind(prefix, 0) == 0)
+                    ts->pluginAutomation.push_back({proc.get(), lane.target.substr(prefix.size()), &lane});
+            }
+            ts->inserts.push_back(std::move(proc));
+        }
+        if (ts->instrument)
+            for (auto& lane : t.automation) {
+                std::string prefix = "plugin:" + t.instrument->id + ":";
+                if (lane.target.rfind(prefix, 0) == 0)
+                    ts->pluginAutomation.push_back(
+                        {ts->instrument.get(), lane.target.substr(prefix.size()), &lane});
+            }
+        tracks_.push_back(std::move(ts));
+    }
+    seek(0);
+}
+
+void Engine::seek(int64_t frame) {
+    pos_ = frame;
+    for (auto& ts : tracks_) {
+        auto it = std::lower_bound(ts->events.begin(), ts->events.end(), frame,
+                                   [](const TrackState::TimedEvent& e, int64_t f) { return e.frame < f; });
+        ts->eventCursor = static_cast<size_t>(it - ts->events.begin());
+        if (ts->instrument) ts->instrument->reset();
+        for (auto& p : ts->inserts) p->reset();
+    }
+}
+
+void Engine::process(float* left, float* right, int frames) {
+    frames = std::min(frames, opts_.maxBlock);
+    std::fill(left, left + frames, 0.f);
+    std::fill(right, right + frames, 0.f);
+    const int64_t blockStart = pos_, blockEnd = pos_ + frames;
+    const double sr = opts_.sampleRate;
+    const int64_t blockTick = static_cast<int64_t>(static_cast<double>(blockStart) / sr / secondsPerTick_);
+
+    for (auto& tsp : tracks_) {
+        TrackState& ts = *tsp;
+        float* l = scratchL_.data();
+        float* r = scratchR_.data();
+        std::fill(l, l + frames, 0.f);
+        std::fill(r, r + frames, 0.f);
+
+        // Audio sources (clips or frozen render), linear-interpolated resampling.
+        for (auto& c : ts.clips) {
+            if (c.endFrame <= blockStart || c.startFrame >= blockEnd) continue;
+            const AudioBuffer& b = *c.buf;
+            const int64_t n = b.frames();
+            int from = static_cast<int>(std::max<int64_t>(0, c.startFrame - blockStart));
+            int to = static_cast<int>(std::min<int64_t>(frames, c.endFrame - blockStart));
+            for (int i = from; i < to; ++i) {
+                double src = c.srcOffset + static_cast<double>(blockStart + i - c.startFrame) * c.ratio;
+                int64_t i0 = static_cast<int64_t>(src);
+                if (i0 + 1 >= n) break;
+                float f = static_cast<float>(src - static_cast<double>(i0));
+                auto sample = [&](int64_t idx, int ch) {
+                    return b.samples[static_cast<size_t>(idx * b.channels + std::min(ch, b.channels - 1))];
+                };
+                float sl = sample(i0, 0) + (sample(i0 + 1, 0) - sample(i0, 0)) * f;
+                float sr2 = sample(i0, 1) + (sample(i0 + 1, 1) - sample(i0, 1)) * f;
+                l[i] += sl * static_cast<float>(c.gain);
+                r[i] += sr2 * static_cast<float>(c.gain);
+            }
+        }
+
+        // Block-rate plugin automation.
+        for (auto& pa : ts.pluginAutomation) pa.proc->setParameter(pa.param, pa.lane->valueAt(blockTick, 0.0));
+
+        if (ts.instrument) {
+            ts.blockEvents.clear();
+            while (ts.eventCursor < ts.events.size() && ts.events[ts.eventCursor].frame < blockEnd) {
+                auto e = ts.events[ts.eventCursor++];
+                e.ev.frameOffset = static_cast<int>(std::max<int64_t>(0, e.frame - blockStart));
+                ts.blockEvents.push_back(e.ev);
+            }
+            ts.instrument->process(l, r, frames, ts.blockEvents.data(),
+                                   static_cast<int>(ts.blockEvents.size()));
+        }
+        for (auto& p : ts.inserts) p->process(l, r, frames, nullptr, 0);
+
+        if (ts.muted) continue;
+        double gainDb0 = ts.gainLane ? ts.gainLane->valueAt(blockTick, ts.track.gainDb) : 0;
+        double gain = ts.gainLane ? dbToGain(gainDb0) : ts.gain;
+        double pan = ts.panLane ? ts.panLane->valueAt(blockTick, ts.pan) : ts.pan;
+        pan = std::clamp(pan, -1.0, 1.0);
+        // Constant-power pan law (-3 dB centre).
+        double angle = (pan + 1.0) * kPi / 4.0;
+        auto gl = static_cast<float>(gain * std::cos(angle) * std::sqrt(2.0));
+        auto gr = static_cast<float>(gain * std::sin(angle) * std::sqrt(2.0));
+        if (!opts_.isolateTrackPreFader.empty()) gl = gr = 1.0f;
+        for (int i = 0; i < frames; ++i) {
+            left[i] += l[i] * gl;
+            right[i] += r[i] * gr;
+        }
+    }
+    pos_ = blockEnd;
+}
+
+namespace {
+AudioBuffer renderWith(const Project& p, MediaProvider& media, PluginHost& host, EngineOptions opts,
+                       double tailSeconds, std::vector<EngineIssue>* issues) {
+    Engine e;
+    e.prepare(p, media, host, opts);
+    if (issues) *issues = e.issues();
+    auto total = static_cast<int64_t>(
+        std::ceil((static_cast<double>(p.endTick()) * p.secondsPerTick() + tailSeconds) * opts.sampleRate));
+    AudioBuffer out;
+    out.sampleRate = opts.sampleRate;
+    out.channels = 2;
+    out.samples.resize(static_cast<size_t>(total * 2));
+    std::vector<float> l(static_cast<size_t>(opts.maxBlock)), r(static_cast<size_t>(opts.maxBlock));
+    for (int64_t done = 0; done < total;) {
+        int n = static_cast<int>(std::min<int64_t>(opts.maxBlock, total - done));
+        e.process(l.data(), r.data(), n);
+        for (int i = 0; i < n; ++i) {
+            out.samples[static_cast<size_t>((done + i) * 2)] = l[static_cast<size_t>(i)];
+            out.samples[static_cast<size_t>((done + i) * 2 + 1)] = r[static_cast<size_t>(i)];
+        }
+        done += n;
+    }
+    return out;
+}
+}  // namespace
+
+AudioBuffer renderProject(const Project& p, MediaProvider& media, PluginHost& host, double sampleRate,
+                          double tailSeconds, std::vector<EngineIssue>* issues) {
+    EngineOptions o;
+    o.sampleRate = sampleRate;
+    return renderWith(p, media, host, o, tailSeconds, issues);
+}
+
+AudioBuffer renderTrackPreFader(const Project& p, const std::string& trackId, MediaProvider& media,
+                                PluginHost& host, double sampleRate, double tailSeconds) {
+    EngineOptions o;
+    o.sampleRate = sampleRate;
+    o.isolateTrackPreFader = trackId;
+    return renderWith(p, media, host, o, tailSeconds, nullptr);
+}
+
+}  // namespace ynot

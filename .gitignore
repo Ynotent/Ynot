@@ -1,0 +1,11 @@
+build*/
+cmake-build-*/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.idea/
+.vs/
+.gradle/
+local.properties
+*.ynot/
+*.wav
