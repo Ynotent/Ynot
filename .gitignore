@@ -9,3 +9,4 @@ xcuserdata/
 local.properties
 *.ynot/
 *.wav
+!app/tests/fixtures/*.wav

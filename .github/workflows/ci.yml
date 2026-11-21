@@ -7,6 +7,11 @@ on:
   push:
   pull_request:
 
+# A newer push to the same branch replaces a run still in progress (saves macOS runners).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux:
     name: Linux (GCC + sanitizers, Clang -Werror)
@@ -83,7 +88,7 @@ jobs:
           xvfb-run -a build/app/YnotApp_artefacts/Release/Ynot --smoke-test "$RUNNER_TEMP/smoke.ynot"
 
   app-macos:
-    timeout-minutes: 45
+    timeout-minutes: 75
     name: App (macOS, CoreAudio + AU/VST3 hosting)
     runs-on: macos-15  # macos-14 was retired by GitHub on 2026-11-02
     steps:
