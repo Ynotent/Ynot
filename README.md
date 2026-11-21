@@ -20,6 +20,10 @@ one account and one project format, not four separate apps.
 | `design/tokens.json` | Shared visual identity (colors, type, spacing, breakpoints) |
 | `docs/` | Architecture, format spec, sync/collaboration, billing, platform plans, ADRs, roadmap |
 
+## Download a test build
+
+See [docs/DOWNLOADS.md](docs/DOWNLOADS.md): unsigned macOS (Apple Silicon) and Windows builds are attached to each CI run.
+
 ## Build and test
 
 Requires CMake 3.22 or later and a C++20 compiler (GCC 11+, Clang 14+, MSVC 2022, Xcode 15+).

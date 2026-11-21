@@ -95,6 +95,13 @@ jobs:
           cmake --build build -j
           ctest --test-dir build --output-on-failure
           build/app/YnotApp_artefacts/Release/Ynot.app/Contents/MacOS/Ynot --smoke-test "$RUNNER_TEMP/smoke.ynot"
+          # Downloadable build (unsigned, not notarized: see docs/DOWNLOADS.md).
+          ditto -c -k --keepParent build/app/YnotApp_artefacts/Release/Ynot.app Ynot-macOS-AppleSilicon.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ynot-macOS-AppleSilicon
+          path: Ynot-macOS-AppleSilicon.zip
+          retention-days: 30
 
   app-windows:
     timeout-minutes: 45
@@ -104,10 +111,16 @@ jobs:
       - uses: actions/checkout@v4
       - shell: bash
         run: |
-          cmake -S . -B build -A x64 -DYNOT_BUILD_APP=ON
+          cmake -S . -B build -A x64 -DYNOT_BUILD_APP=ON -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           cmake --build build --config Release -j
           ctest --test-dir build -C Release --output-on-failure
           build/app/YnotApp_artefacts/Release/Ynot.exe --smoke-test "$RUNNER_TEMP/smoke.ynot"
+          mkdir -p dist && cp build/app/YnotApp_artefacts/Release/Ynot.exe dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ynot-Windows-x64
+          path: dist/Ynot.exe
+          retention-days: 30
 
   app-ios:
     timeout-minutes: 45
