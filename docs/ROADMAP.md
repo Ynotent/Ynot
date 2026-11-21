@@ -4,23 +4,26 @@ All four platforms are part of the architecture from the start. They are deliver
 milestones, and **a platform is only called "supported" after native builds pass CI *and* the
 real-device test matrix for that milestone has been completed and signed off.**
 
-## Current status (Stage 17, plus M1 started)
+## Current status (Stage 17, plus M1 in progress)
 
-| Platform | Status | What exists |
+Based on CI run #1 (commit `0fea6cc`, 2026-11-21) on GitHub-hosted runners:
+
+| Platform | Status | Evidence |
 |---|---|---|
-| macOS | **Planned** (M1 in progress) | Shared core + JUCE app shell (CoreAudio, AU/VST3 hosting) defined; CI build job defined* |
-| Windows | **Planned** | Shared core + the same JUCE app (WASAPI, ASIO with SDK, VST3) defined; CI build job defined* |
-| iOS / iPadOS | **Planned** | Shared core + the same JUCE app; unsigned simulator CI build job defined* |
-| Android | **Planned** | Shared core; CI job cross-compiles the core with the NDK* |
+| Windows | **native-shell-builds** | MSVC x64: core builds and 52/52 tests pass; the JUCE app (WASAPI + VST3 hosting) builds, its 9 adapter tests pass, and the headless smoke test passes (including recording through the audio callback). |
+| Android | **core-compiles** | Core cross-compiles with the NDK for arm64-v8a and x86_64. No Android app shell yet (M5). |
+| macOS | **Planned** (M1 in progress) | CI jobs defined but **never ran**: GitHub cancelled them before a macOS runner was assigned (see below). |
+| iOS / iPadOS | **Planned** | Same as macOS: the iOS jobs need a macOS runner and never started. |
+| Linux (dev host only) | n/a | Core with ASan/UBSan and Clang `-Werror`, app build and smoke test pass in CI and locally. |
 
-\* The JUCE app (`app/`) has been built and run only on the Linux dev host: 9/9 adapter tests
-and the headless smoke test pass, and the UI was rendered at phone, tablet and desktop sizes.
-Nothing has been built for macOS, Windows or iOS yet.
+**macOS runners:** all four macOS-based jobs in run #1 were cancelled within a second with no
+logs, before any step ran. This is a GitHub account setting, not a build error: typically macOS
+runner minutes are unavailable on the account (for example a $0 Actions spending limit on a
+private repository) or an organization policy blocks macOS runners. Until that's resolved, the
+alternatives are a self-hosted Mac runner or attaching a Mac to a session.
 
-Core: verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 52/52
-tests pass. The macOS, Windows, iOS and Android CI jobs are defined in
-`.github/workflows/ci.yml` but **have not run yet**. Once they pass, a platform moves to
-`core-compiles`. None of these statuses means the app is usable on that platform.
+None of these statuses means the app is usable on that platform. Windows is the furthest along,
+but it has not been run with a real audio interface, plugin or user.
 
 Status levels match `PlatformStatus` in `core/include/ynot/platform.hpp`:
 `planned → core-compiles → native-shell-builds → real-device-verified`.
@@ -34,7 +37,8 @@ was passed if it wasn't.
 - Architecture, platform capability model, universal project format v1.
 - Audio engine; compatibility, freeze and render; collaboration op-log.
 - Responsive layout rules, entitlements, AI gating.
-- **Gate:** core tests are green on Linux ✅; the four-platform CI matrix is green ⏳.
+- **Gate:** core tests are green on Linux ✅, Windows ✅ and Android (compile) ✅; macOS and iOS
+  CI ⏳ (blocked by macOS runner availability).
 
 ### M1: macOS alpha (first native shell), in progress
 Done so far (built and tested on the Linux dev host only):
