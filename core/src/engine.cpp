@@ -251,8 +251,15 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
                                              "' is not available on this device yet (still syncing?)."});
                 continue;
             }
-            ts->clips.push_back({tickToFrame(c.startTick), tickToFrame(c.startTick + c.lengthTick),
-                                 static_cast<double>(c.sourceOffsetFrames), b->sampleRate / sr,
+            // Clip edges are rounded to whole output samples, but the source position is
+            // computed from the exact (fractional) start time, so splitting a clip never
+            // shifts the audio after the split point.
+            const int64_t startFrame = tickToFrame(c.startTick);
+            const double exactStart = static_cast<double>(c.startTick) * secondsPerTick_ * sr;
+            const double ratio = b->sampleRate / sr;
+            const double srcOffset =
+                static_cast<double>(c.sourceOffsetFrames) + (static_cast<double>(startFrame) - exactStart) * ratio;
+            ts->clips.push_back({startFrame, tickToFrame(c.startTick + c.lengthTick), srcOffset, ratio,
                                  dbToGain(c.gainDb), b});
         }
 
@@ -267,6 +274,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
         for (auto& c : t.midiClips) {
             int64_t clipEnd = c.startTick + c.lengthTick;
             for (auto& n : c.notes) {
+                if (n.tick < 0) continue;  // hidden by a start trim (kept, not deleted)
                 int64_t on = c.startTick + n.tick;
                 if (on >= clipEnd) continue;
                 int64_t off = std::min(on + n.lengthTick, clipEnd);
@@ -345,6 +353,7 @@ void Engine::process(float* left, float* right, int frames, const float* const* 
             int to = static_cast<int>(std::min<int64_t>(frames, c.endFrame - blockStart));
             for (int i = from; i < to; ++i) {
                 double src = c.srcOffset + static_cast<double>(blockStart + i - c.startFrame) * c.ratio;
+                if (src < 0) continue;
                 int64_t i0 = static_cast<int64_t>(src);
                 if (i0 + 1 >= n) break;
                 float f = static_cast<float>(src - static_cast<double>(i0));

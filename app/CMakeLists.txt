@@ -11,7 +11,8 @@ set(YNOT_APP_SOURCES
     src/JuceAudioDevice.cpp
     src/JucePluginHost.cpp
     src/Session.cpp
-    src/MainComponent.cpp)
+    src/MainComponent.cpp
+    src/ArrangeView.cpp)
 
 juce_add_gui_app(YnotApp
     PRODUCT_NAME "Ynot"

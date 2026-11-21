@@ -15,6 +15,7 @@ Session::~Session() {
 void Session::newDemo(const juce::File& dir) {
     dir.createDirectory();
     project_ = ynot::makeDemoProject(dir.getFullPathName().toStdString());
+    history_.clear();
     dir_ = dir;
     loaded_ = true;
     ynot::saveProjectPackage(project_, dir_.getFullPathName().toStdString());
@@ -24,6 +25,7 @@ void Session::newDemo(const juce::File& dir) {
 
 void Session::open(const juce::File& dir) {
     project_ = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
+    history_.clear();
     dir_ = dir;
     loaded_ = true;
     media_ = std::make_unique<ynot::PackageMediaProvider>(dir_.getFullPathName().toStdString());
@@ -39,13 +41,47 @@ void Session::save() {
 void Session::edit(const std::function<void(ynot::Project&)>& fn) {
     if (!loaded_) return;
     host_.captureState(project_);  // keep plugin tweaks made in their editors
+    history_.record(project_);
     fn(project_);
     rebuild();
+}
+
+bool Session::undo() {
+    if (!loaded_ || recording_ || !history_.canUndo()) return false;
+    host_.captureState(project_);
+    history_.undo(project_);
+    rebuild();
+    return true;
+}
+
+bool Session::redo() {
+    if (!loaded_ || recording_ || !history_.canRedo()) return false;
+    host_.captureState(project_);
+    history_.redo(project_);
+    rebuild();
+    return true;
+}
+
+void Session::seekToTick(int64_t tick) {
+    const int64_t frame = ynot::tickToFrame(project_, std::max<int64_t>(0, tick), sampleRate_);
+    position_ = frame;
+    pendingSeek_ = frame;  // applied by the audio thread at the start of its next block
+}
+
+int64_t Session::positionTick() const {
+    return ynot::frameToTick(project_, position_.load(), sampleRate_);
+}
+
+const ynot::AudioBuffer* Session::mediaAudio(const std::string& mediaId) {
+    if (!loaded_ || !media_) return nullptr;
+    const auto* m = project_.findMedia(mediaId);
+    return m ? media_->get(*m) : nullptr;
 }
 
 void Session::freeze(const std::string& trackId) {
     if (!loaded_) return;
     host_.captureState(project_);
+    history_.record(project_);
     ynot::freezeTrack(project_, dir_.getFullPathName().toStdString(), trackId, *media_, host_,
                       ynot::currentPlatform(), sampleRate_);
     save();
@@ -208,6 +244,7 @@ Session::RecordResult Session::stopRecording() {
     result.droppedFrames = recorder_.droppedFrames();
     result.error = recorder_.error();
     const int latency = device_.manager().getCurrentAudioDevice() ? ynot::recordingOffsetFrames(device_) : 0;
+    history_.record(project_);
     result.newClips = ynot::commitTakes(project_, dir_.getFullPathName().toStdString(), takes, latency);
     save();
     rebuild();
@@ -254,6 +291,10 @@ double Session::positionSeconds() const { return static_cast<double>(position_.l
 void Session::audioCallback(const float* const* ins, int numIns, float* const* outs, int numOuts, int frames) {
     inCallback_ = true;
     ynot::Engine* engine = active_.load();
+    if (engine) {
+        const int64_t seek = pendingSeek_.exchange(kNoSeek);
+        if (seek != kNoSeek) engine->seek(seek);
+    }
     // Capture before rendering: some drivers share input and output buffers.
     if (engine && recording_.load()) recorder_.capture(ins, numIns, frames, engine->position());
     float* l = numOuts > 0 ? outs[0] : scratchL_.data();

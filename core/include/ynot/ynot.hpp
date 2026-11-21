@@ -6,6 +6,7 @@
 #include "ynot/collab.hpp"
 #include "ynot/compatibility.hpp"
 #include "ynot/demo.hpp"
+#include "ynot/edit.hpp"
 #include "ynot/engine.hpp"
 #include "ynot/json.hpp"
 #include "ynot/media.hpp"

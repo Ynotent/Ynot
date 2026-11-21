@@ -35,6 +35,17 @@ public:
     // Edits (message thread). Each one rebuilds the engine.
     void edit(const std::function<void(ynot::Project&)>& fn);
     void freeze(const std::string& trackId);
+    void reload() { rebuild(); }  // re-resolve plugins/media without an undo step
+    bool undo();
+    bool redo();
+    bool canUndo() const { return history_.canUndo(); }
+    bool canRedo() const { return history_.canRedo(); }
+
+    // Playhead (message thread). Seeks are handed to the audio thread lock-free.
+    void seekToTick(int64_t tick);
+    int64_t positionTick() const;
+    // Decoded audio for drawing waveforms (message thread; cached).
+    const ynot::AudioBuffer* mediaAudio(const std::string& mediaId);
     void unfreeze(const std::string& trackId);
 
     // Audio.
@@ -114,6 +125,9 @@ private:
     std::atomic<bool> monitoring_{false};
     int countInBars_ = 0;
     int64_t forcedClickUntil_ = std::numeric_limits<int64_t>::min();
+    ynot::History history_;
+    static constexpr int64_t kNoSeek = std::numeric_limits<int64_t>::min();
+    std::atomic<int64_t> pendingSeek_{kNoSeek};
     int simulatedInputs_ = 0;
 };
 

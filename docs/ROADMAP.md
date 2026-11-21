@@ -17,7 +17,7 @@ real-device test matrix for that milestone has been completed and signed off.**
 and the headless smoke test pass, and the UI was rendered at phone, tablet and desktop sizes.
 Nothing has been built for macOS, Windows or iOS yet.
 
-Core: verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 44/44
+Core: verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 52/52
 tests pass. The macOS, Windows, iOS and Android CI jobs are defined in
 `.github/workflows/ci.yml` but **have not run yet**. Once they pass, a platform moves to
 `core-compiles`. None of these statuses means the app is usable on that platform.
@@ -63,15 +63,33 @@ Done so far (built and tested on the Linux dev host only):
     phone speakers.
   - Microphone permission handling for Android.
 
+- **Arrangement view and editing:**
+  - Ruler with bars and beats; playhead that follows playback.
+  - Audio waveforms and MIDI note previews in every clip.
+  - Move clips, including onto another track of the same kind; trim either edge; split by
+    double-click, the S key or the menu; delete.
+  - Snap to a grid that adapts to the zoom level.
+  - Zoom with Cmd/Ctrl+wheel or trackpad pinch; scroll with Shift+wheel or horizontal wheel.
+  - Undo/redo for every edit, including recordings and freezes.
+  - On phones, each lane sits under its track header at full width, file actions are in a
+    "More" menu, Freeze is in the track menu (tap the name), and the compatibility report is a
+    summary button.
+  - The edit operations live in the core (`edit.hpp`), so every platform edits identically.
+    They are non-destructive: trims never change media or delete MIDI notes.
+  - Verified on the Linux dev host by driving the real app with X11 mouse and keyboard events:
+    move, undo, double-click split, edge trim and delete, then checking the saved project
+    file. Touch gestures (long-press menu, two-finger pinch and pan) are implemented but
+    can't be exercised without a touch device, so they are untested until M4/M5 hardware runs.
+
 Still to do:
 - Build and run on a real Mac; out-of-process plugin hosting and scanning; plugin editor windows.
 - Loop/cycle recording with take lanes; count-in length choice (currently 1 bar).
-- On phones, move file actions (New/Open/Save/Audio) into a menu so the transport gets the
-  space. The toolbar currently wraps onto four rows.
 - MIDI recording from controllers onto instrument tracks.
 - Recording latency calibration tool (loopback test). Driver-reported latency is often wrong
   by a few milliseconds.
-- Timeline editing (clips, MIDI, automation).
+- MIDI note editor (piano roll); automation lane editing; clip gain/fades; multi-select;
+  copy/paste.
+- Remove unreferenced media from the package after undo (orphaned takes are kept on disk today).
 - Features: record, edit, arrange, mix, freeze, open and save `.ynot`.
 - Replace linear resampling with windowed-sinc. Add a recording latency calibration tool.
 - **Real-device gate:**

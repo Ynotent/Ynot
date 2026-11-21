@@ -18,128 +18,48 @@ bool hasPrecisePointer() {
     return true;
 #endif
 }
+
+bool canScanPlugins() {
+#if JUCE_IOS || JUCE_ANDROID
+    return false;  // mobile: AUv3 discovery is system-managed (M4); Android has no plugin scan
+#else
+    return true;
+#endif
+}
 }  // namespace
 
-constexpr int kStackBelowWidth = 560;
-
-// One track row: name, source, badges and input/arm/mute/solo/freeze controls.
-class MainComponent::TrackRow : public juce::Component {
-public:
-    TrackRow(MainComponent& owner) : owner_(owner) {
-        for (auto* b : {&arm_, &input_, &mute_, &solo_, &freeze_}) addAndMakeVisible(*b);
-        arm_.setColour(juce::TextButton::buttonOnColourId, owner_.theme_.record);
-        arm_.onClick = [this] {
-            if (owner_.session_.isRecording()) return;  // arming changes are blocked mid-take
-            owner_.session_.edit([id = id_](ynot::Project& p) { if (auto* t = p.findTrack(id)) t->armed = !t->armed; });
-        };
-        input_.onClick = [this] { owner_.session_.cycleInput(id_); };
-        mute_.setClickingTogglesState(false);
-        solo_.setClickingTogglesState(false);
-        mute_.onClick = [this] { owner_.session_.edit([id = id_](ynot::Project& p) { if (auto* t = p.findTrack(id)) t->mute = !t->mute; }); };
-        solo_.onClick = [this] { owner_.session_.edit([id = id_](ynot::Project& p) { if (auto* t = p.findTrack(id)) t->solo = !t->solo; }); };
-        freeze_.onClick = [this] {
-            const auto* t = owner_.session_.project().findTrack(id_);
-            if (!t) return;
-            try {
-                if (t->frozen) owner_.session_.unfreeze(id_);
-                else owner_.session_.freeze(id_);
-            } catch (const std::exception& e) {
-                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Can't freeze", e.what());
-            }
-        };
-    }
-
-    void update(const ynot::Track& t, bool canFreezeHere) {
-        id_ = t.id;
-        track_ = t;
-        const bool audio = t.kind == ynot::TrackKind::Audio;
-        arm_.setVisible(audio);  // MIDI recording for instrument tracks comes later in M1
-        input_.setVisible(audio);
-        arm_.setToggleState(t.armed, juce::dontSendNotification);
-        input_.setButtonText(owner_.session_.inputLabel(t.id));
-        mute_.setToggleState(t.mute, juce::dontSendNotification);
-        solo_.setToggleState(t.solo, juce::dontSendNotification);
-        freeze_.setButtonText(t.frozen ? "Unfreeze" : "Freeze");
-        freeze_.setEnabled(t.frozen || canFreezeHere);
-        repaint();
-    }
-
-    void paint(juce::Graphics& g) override {
-        auto& th = owner_.theme_;
-        auto r = getLocalBounds().reduced(4, 2);
-        g.setColour(th.surfaceRaised);
-        g.fillRoundedRectangle(r.toFloat(), 6.f);
-        g.setColour(Theme::hex(track_.color));
-        g.fillRoundedRectangle(r.removeFromLeft(6).toFloat(), 3.f);
-        r.removeFromLeft(10);
-        auto text = stacked() ? r.removeFromTop(r.getHeight() / 2 - 2) : r.withTrimmedRight(controlsWidth());
-        g.setColour(th.text);
-        g.setFont(juce::FontOptions(th.bodySize + 1.f, juce::Font::bold));
-        g.drawText(track_.name, text.removeFromTop(text.getHeight() / 2), juce::Justification::bottomLeft);
-        juce::String detail = track_.kind == ynot::TrackKind::Audio ? "Audio" : "Instrument";
-        if (track_.instrument) detail << " - " << track_.instrument->name;
-        for (auto& p : track_.inserts) detail << " - " << p.name;
-        if (track_.frozen) detail << "   FROZEN";
-        g.setColour(track_.frozen ? th.secondary : th.textMuted);
-        g.setFont(juce::FontOptions(th.bodySize));
-        g.drawText(detail, text, juce::Justification::topLeft, true);
-    }
-
-    void resized() override {
-        auto r = getLocalBounds().reduced(8, 6);
-        if (stacked()) r = r.removeFromBottom(r.getHeight() / 2 + 2).withTrimmedLeft(16);  // controls under the name
-        const int unit = r.getHeight();
-        freeze_.setBounds(r.removeFromRight(unit * 2));
-        r.removeFromRight(6);
-        solo_.setBounds(r.removeFromRight(unit));
-        r.removeFromRight(4);
-        mute_.setBounds(r.removeFromRight(unit));
-        r.removeFromRight(4);
-        arm_.setBounds(r.removeFromRight(unit));
-        r.removeFromRight(4);
-        input_.setBounds(r.removeFromRight(unit * 3 / 2));
-    }
-
-private:
-    // Narrow rows (phones, split-screen) put controls on a second line.
-    bool stacked() const { return getWidth() < kStackBelowWidth; }
-    int controlsWidth() const {
-        const int unit = getHeight() - 12;
-        int w = unit * 4 + 24;  // M, S, Freeze (2 units) and gaps
-        if (arm_.isVisible()) w += unit + 4;
-        if (input_.isVisible()) w += unit * 3 / 2 + 4;
-        return w;
-    }
-    MainComponent& owner_;
-    std::string id_;
-    ynot::Track track_;
-    juce::TextButton arm_{"R"}, input_{"In 1"}, mute_{"M"}, solo_{"S"}, freeze_{"Freeze"};
-};
-
 MainComponent::MainComponent(Session& session, JucePluginHost& host)
-    : session_(session), host_(host), theme_(Theme::load(true)) {
+    : session_(session), host_(host), theme_(Theme::load(true)), arrange_(session, host, theme_) {
     theme_.apply(lnf_);
     setLookAndFeel(&lnf_);
+    setWantsKeyboardFocus(true);
 
-    for (auto* b : {&newButton_, &openButton_, &saveButton_, &playButton_, &recordButton_, &clickButton_,
-                    &countInButton_, &monitorButton_, &audioButton_, &scanButton_})
+    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &undoButton_,
+                    &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_, &moreButton_})
         addAndMakeVisible(*b);
-    countInButton_.setClickingTogglesState(true);
-    countInButton_.onClick = [this] { session_.setCountInBars(countInButton_.getToggleState() ? 1 : 0); };
-    monitorButton_.setClickingTogglesState(true);
-    monitorButton_.onClick = [this] { session_.setMonitoring(monitorButton_.getToggleState()); };
-    recordButton_.setColour(juce::TextButton::buttonOnColourId, theme_.record);
-    recordButton_.onClick = [this] { toggleRecording(); };
-    clickButton_.setClickingTogglesState(true);
-    clickButton_.onClick = [this] { session_.setMetronome(clickButton_.getToggleState()); };
-    addAndMakeVisible(status_);
-    addAndMakeVisible(tracks_);
-    addAndMakeVisible(compatTitle_);
-    addAndMakeVisible(target_);
-    addAndMakeVisible(prepareButton_);
-    addAndMakeVisible(compat_);
+    for (auto* c : std::initializer_list<juce::Component*>{&status_, &arrange_, &compatTitle_, &target_,
+                                                           &prepareButton_, &compatSummary_, &compat_})
+        addAndMakeVisible(*c);
 
-    tracks_.setModel(this);
+    recordButton_.setColour(juce::TextButton::buttonOnColourId, theme_.record);
+    for (auto* b : {&clickButton_, &countInButton_, &monitorButton_}) b->setClickingTogglesState(true);
+
+    playButton_.onClick = [this] { togglePlay(); };
+    recordButton_.onClick = [this] { toggleRecording(); };
+    clickButton_.onClick = [this] { session_.setMetronome(clickButton_.getToggleState()); };
+    countInButton_.onClick = [this] { session_.setCountInBars(countInButton_.getToggleState() ? 1 : 0); };
+    monitorButton_.onClick = [this] { session_.setMonitoring(monitorButton_.getToggleState()); };
+    undoButton_.onClick = [this] { session_.undo(); };
+    redoButton_.onClick = [this] { session_.redo(); };
+    newButton_.onClick = [this] { newDemo(); };
+    openButton_.onClick = [this] { openProject(); };
+    saveButton_.onClick = [this] { session_.save(); };
+    audioButton_.onClick = [this] { showAudioSettings(); };
+    scanButton_.onClick = [this] { scanPlugins(); };
+    moreButton_.onClick = [this] { showMoreMenu(); };
+    prepareButton_.onClick = [this] { prepareForMobile(); };
+    compatSummary_.onClick = [this] { showCompatibilityDialog(); };
+
     compatTitle_.setText("Open this project on", juce::dontSendNotification);
     for (int i = 0; i < 4; ++i) target_.addItem(kTargetNames[i], i + 1);
     target_.setSelectedId(3, juce::dontSendNotification);  // iPhone/iPad: the most common handoff
@@ -147,25 +67,6 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     compat_.setMultiLine(true);
     compat_.setReadOnly(true);
     compat_.setScrollbarsShown(true);
-
-    newButton_.onClick = [this] {
-        auto dir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-                       .getChildFile("Ynot").getNonexistentChildFile("Demo Song", ".ynot");
-        session_.newDemo(dir);
-    };
-    openButton_.onClick = [this] { openProject(); };
-    saveButton_.onClick = [this] { session_.save(); };
-    playButton_.onClick = [this] {
-        if (session_.isPlaying()) session_.stop();
-        else session_.play();
-        refresh();
-    };
-    audioButton_.onClick = [this] { showAudioSettings(); };
-    scanButton_.onClick = [this] { scanPlugins(); };
-    prepareButton_.onClick = [this] { prepareForMobile(); };
-#if JUCE_IOS || JUCE_ANDROID
-    scanButton_.setVisible(false);  // mobile: AUv3 discovery is system-managed (M4)
-#endif
 
     session_.onChange = [this] { refresh(); };
     setSize(1280, 800);
@@ -175,26 +76,32 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
 
 MainComponent::~MainComponent() {
     session_.onChange = nullptr;
-    tracks_.setModel(nullptr);
     setLookAndFeel(nullptr);
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(theme_.background); }
 
 void MainComponent::resized() {
-    layout_ = ynot::decideLayout({layoutPlatformOverride.value_or(ynot::currentPlatform()), static_cast<double>(getWidth()),
-                                  static_cast<double>(getHeight()), hasPrecisePointer(), hasPrecisePointer()});
+    layout_ = ynot::decideLayout({layoutPlatformOverride.value_or(ynot::currentPlatform()),
+                                  static_cast<double>(getWidth()), static_cast<double>(getHeight()),
+                                  hasPrecisePointer(), hasPrecisePointer()});
     const int target = static_cast<int>(std::max(layout_.minTouchTargetDp, 32.0));
     auto r = getLocalBounds().reduced(12);
 
-    // Toolbar: buttons flow onto extra rows when the window is narrow (phones,
-    // split-screen tablets, small desktop windows).
-    const bool compact = layout_.layout == ynot::LayoutClass::Compact;
-    const int buttonWidth = compact ? std::max(target * 2, 84) : 110;
+    // Toolbar. Phones keep transport + editing and move file/device actions into "More".
+    std::vector<juce::TextButton*> toolbar{&playButton_, &recordButton_, &clickButton_, &countInButton_,
+                                           &monitorButton_, &undoButton_, &redoButton_};
+    for (auto* b : {&newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_}) {
+        const bool show = !compact() && (b != &scanButton_ || canScanPlugins());
+        b->setVisible(show);
+        if (show) toolbar.push_back(b);
+    }
+    moreButton_.setVisible(compact());
+    if (compact()) toolbar.push_back(&moreButton_);
+
+    const int buttonWidth = compact() ? std::max(target * 2 - 8, 80) : 96;
     auto bar = r.removeFromTop(target);
-    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &newButton_,
-                    &openButton_, &saveButton_, &audioButton_, &scanButton_}) {
-        if (!b->isVisible()) continue;
+    for (auto* b : toolbar) {
         if (bar.getWidth() < buttonWidth) {
             r.removeFromTop(6);
             bar = r.removeFromTop(target);
@@ -209,10 +116,8 @@ void MainComponent::resized() {
     status_.setBounds(bar);
     r.removeFromTop(10);
 
-    const int listWidth = layout_.showPerTrackInspector ? r.getWidth() - std::min(420, r.getWidth() / 3) - 12 : r.getWidth();
-    tracks_.setRowHeight(listWidth < kStackBelowWidth ? target * 2 + 24 : std::max(target + 12, 56));
     if (layout_.showPerTrackInspector) {
-        auto side = r.removeFromRight(std::min(420, r.getWidth() / 3));
+        auto side = r.removeFromRight(std::min(380, r.getWidth() / 4 + 60));
         r.removeFromRight(12);
         compatTitle_.setBounds(side.removeFromTop(24));
         target_.setBounds(side.removeFromTop(target));
@@ -220,45 +125,31 @@ void MainComponent::resized() {
         prepareButton_.setBounds(side.removeFromTop(target));
         side.removeFromTop(6);
         compat_.setBounds(side);
-        tracks_.setBounds(r);
+        compatSummary_.setVisible(false);
+        for (auto* c : std::initializer_list<juce::Component*>{&compatTitle_, &prepareButton_, &compat_}) c->setVisible(true);
     } else {
-        auto bottom = r.removeFromBottom(r.getHeight() * 2 / 5);
-        tracks_.setBounds(r);
-        bottom.removeFromTop(8);
-        auto row = bottom.removeFromTop(target);
-        target_.setBounds(row.removeFromLeft(row.getWidth() / 2).reduced(0, 0));
+        // Phones / narrow windows: one compact row; the full report opens on demand.
+        auto row = r.removeFromBottom(target);
+        r.removeFromBottom(8);
+        target_.setBounds(row.removeFromLeft(row.getWidth() / 2));
         row.removeFromLeft(6);
-        prepareButton_.setBounds(row);
-        compatTitle_.setBounds({});
-        bottom.removeFromTop(6);
-        compat_.setBounds(bottom);
+        compatSummary_.setBounds(row);
+        compatSummary_.setVisible(true);
+        for (auto* c : std::initializer_list<juce::Component*>{&compatTitle_, &prepareButton_, &compat_}) c->setVisible(false);
     }
+    arrange_.setBounds(r);
+    arrange_.setLayout(layout_);
 }
 
-int MainComponent::getNumRows() {
-    return session_.hasProject() ? static_cast<int>(session_.project().tracks.size()) : 0;
-}
-
-void MainComponent::paintListBoxItem(int, juce::Graphics&, int, int, bool) {}
-
-juce::Component* MainComponent::refreshComponentForRow(int row, bool, juce::Component* existing) {
-    auto* rowComp = dynamic_cast<TrackRow*>(existing);
-    if (!session_.hasProject() || row >= getNumRows()) {
-        delete existing;
-        return nullptr;
-    }
-    if (!rowComp) {
-        delete existing;
-        rowComp = new TrackRow(*this);
-    }
-    auto ordered = session_.project().orderedTracks();
-    const ynot::Track& t = *ordered[static_cast<size_t>(row)];
-    bool canFreeze = true;
-    auto check = [&](const ynot::PluginInstance& p) { canFreeze &= p.bypassed || host_.isAvailable(p); };
-    if (t.instrument) check(*t.instrument);
-    for (auto& p : t.inserts) check(p);
-    rowComp->update(t, canFreeze);
-    return rowComp;
+bool MainComponent::keyPressed(const juce::KeyPress& key) {
+    const auto cmd = juce::ModifierKeys::commandModifier;
+    if (key == juce::KeyPress('z', cmd, 0)) return session_.undo(), true;
+    if (key == juce::KeyPress('z', cmd | juce::ModifierKeys::shiftModifier, 0) ||
+        key == juce::KeyPress('y', cmd, 0))
+        return session_.redo(), true;
+    if (key == juce::KeyPress('s', cmd, 0)) return session_.save(), true;
+    if (key == juce::KeyPress::spaceKey) return togglePlay(), true;
+    return arrange_.keyPressed(key);
 }
 
 void MainComponent::timerCallback() {
@@ -268,19 +159,20 @@ void MainComponent::timerCallback() {
     s << juce::String(session_.project().name) << "   ";
     s << juce::String(session_.positionSeconds(), 1) << " s   ";
     if (session_.isRecording()) s << "REC " << juce::String(session_.recordingSeconds(), 1) << " s   ";
-    if (session_.monitoring() && dev)
-        s << "monitor " << juce::String(session_.monitoringLatencyMs(), 1) << " ms   ";
+    if (session_.monitoring() && dev) s << "monitor " << juce::String(session_.monitoringLatencyMs(), 1) << " ms   ";
     s << (dev ? dev->getTypeName() + ": " + dev->getName() : juce::String("no audio device"));
     status_.setText(s, juce::dontSendNotification);
+    playButton_.setButtonText(session_.isPlaying() ? "Stop" : "Play");
 }
 
 void MainComponent::refresh() {
     playButton_.setButtonText(session_.isPlaying() ? "Stop" : "Play");
+    playButton_.setToggleState(session_.isPlaying(), juce::dontSendNotification);
     recordButton_.setToggleState(session_.isRecording(), juce::dontSendNotification);
     recordButton_.setButtonText(session_.isRecording() ? "Stop Rec" : "Record");
-    playButton_.setToggleState(session_.isPlaying(), juce::dontSendNotification);
-    tracks_.updateContent();
-    tracks_.repaint();
+    undoButton_.setEnabled(session_.canUndo() && !session_.isRecording());
+    redoButton_.setEnabled(session_.canRedo() && !session_.isRecording());
+    arrange_.refresh();
     refreshCompatibility();
 }
 
@@ -291,7 +183,9 @@ ynot::Platform MainComponent::selectedTarget() const {
 
 void MainComponent::refreshCompatibility() {
     if (!session_.hasProject()) {
-        compat_.setText("Create or open a project to check it against other devices.");
+        compatText_ = "Create or open a project to check it against other devices.";
+        compat_.setText(compatText_);
+        compatSummary_.setButtonText("No project");
         return;
     }
     juce::String out;
@@ -305,8 +199,27 @@ void MainComponent::refreshCompatibility() {
         for (auto o : i.options) out << "      - " << ynot::toString(o) << "\n";
         out << "\n";
     }
+    compatText_ = out;
     compat_.setText(out);
     prepareButton_.setEnabled(!session_.tracksToPrepareForMobile().empty());
+    const int problems = report.count(ynot::Severity::Blocking) + report.count(ynot::Severity::Warning);
+    compatSummary_.setButtonText(problems == 0 ? juce::String("Compatible") : juce::String(problems) + " issue" +
+                                                                                  (problems == 1 ? "" : "s"));
+    compatSummary_.setColour(juce::TextButton::textColourOffId,
+                             report.count(ynot::Severity::Blocking) > 0 ? theme_.record : theme_.text);
+}
+
+void MainComponent::togglePlay() {
+    if (session_.isRecording()) toggleRecording();
+    else if (session_.isPlaying()) session_.stop();
+    else session_.play();
+    refresh();
+}
+
+void MainComponent::newDemo() {
+    auto dir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                   .getChildFile("Ynot").getNonexistentChildFile("Demo Song", ".ynot");
+    session_.newDemo(dir);
 }
 
 void MainComponent::openProject() {
@@ -323,6 +236,38 @@ void MainComponent::openProject() {
                                                                          "Can't open project", e.what());
                               }
                           });
+}
+
+void MainComponent::showMoreMenu() {
+    juce::PopupMenu m;
+    m.addItem("New Demo", [this] { newDemo(); });
+    m.addItem("Open...", [this] { openProject(); });
+    m.addItem("Save", [this] { session_.save(); });
+    m.addSeparator();
+    m.addItem("Split clip at playhead", arrange_.hasSelection(), false, [this] { arrange_.splitSelectedAtPlayhead(); });
+    m.addItem("Delete clip", arrange_.hasSelection(), false, [this] { arrange_.deleteSelected(); });
+    m.addSeparator();
+    m.addItem("Prepare for iPhone & Android", !session_.tracksToPrepareForMobile().empty(), false,
+              [this] { prepareForMobile(); });
+    m.addItem("Audio settings...", [this] { showAudioSettings(); });
+    if (canScanPlugins()) m.addItem("Scan plugins", [this] { scanPlugins(); });
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(moreButton_));
+}
+
+void MainComponent::showCompatibilityDialog() {
+    auto* editor = new juce::TextEditor();
+    editor->setMultiLine(true);
+    editor->setReadOnly(true);
+    editor->setScrollbarsShown(true);
+    editor->setText(compatText_);
+    editor->setSize(std::max(300, getWidth() - 24), std::max(300, getHeight() * 2 / 3));
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned(editor);
+    o.dialogTitle = "Open this project on " + juce::String(kTargetNames[target_.getSelectedId() - 1]);
+    o.dialogBackgroundColour = theme_.surface;
+    o.useNativeTitleBar = true;
+    o.resizable = true;
+    o.launchAsync();
 }
 
 void MainComponent::toggleRecording() {
@@ -365,7 +310,7 @@ void MainComponent::scanPlugins() {
     host_.scanDefaultLocations();
     scanButton_.setButtonText("Scan Plugins");
     scanButton_.setEnabled(true);
-    session_.edit([](ynot::Project&) {});  // reload so newly found plugins become live
+    session_.reload();  // newly found plugins become live (not an undoable edit)
 }
 
 void MainComponent::prepareForMobile() {

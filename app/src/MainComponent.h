@@ -5,13 +5,14 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include "ArrangeView.h"
 #include "Session.h"
 #include "Theme.h"
 #include "ynot/ui_layout.hpp"
 
 namespace ynotapp {
 
-class MainComponent : public juce::Component, private juce::ListBoxModel, private juce::Timer {
+class MainComponent : public juce::Component, private juce::Timer {
 public:
     MainComponent(Session& session, JucePluginHost& host);
     ~MainComponent() override;
@@ -21,24 +22,24 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
 private:
-    // ListBoxModel (track list)
-    int getNumRows() override;
-    void paintListBoxItem(int row, juce::Graphics&, int width, int height, bool selected) override;
-    juce::Component* refreshComponentForRow(int row, bool selected, juce::Component* existing) override;
     void timerCallback() override;
 
     void refresh();
     void refreshCompatibility();
     void openProject();
+    void newDemo();
     void showAudioSettings();
     void toggleRecording();
+    void togglePlay();
     void scanPlugins();
     void prepareForMobile();
+    void showMoreMenu();
+    void showCompatibilityDialog();
     ynot::Platform selectedTarget() const;
-
-    class TrackRow;
+    bool compact() const { return layout_.layout == ynot::LayoutClass::Compact; }
 
     Session& session_;
     JucePluginHost& host_;
@@ -46,16 +47,23 @@ private:
     juce::LookAndFeel_V4 lnf_;
     ynot::LayoutDecision layout_{};
 
-    juce::TextButton newButton_{"New Demo"}, openButton_{"Open"}, saveButton_{"Save"};
+    // Transport and editing (always visible).
     juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
     juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
-    juce::TextButton audioButton_{"Audio"}, scanButton_{"Scan Plugins"};
+    juce::TextButton undoButton_{"Undo"}, redoButton_{"Redo"};
+    // File/device actions: toolbar on larger screens, "More" menu on phones.
+    juce::TextButton newButton_{"New Demo"}, openButton_{"Open"}, saveButton_{"Save"};
+    juce::TextButton audioButton_{"Audio"}, scanButton_{"Scan Plugins"}, moreButton_{"More"};
     juce::Label status_;
-    juce::ListBox tracks_;
+    ArrangeView arrange_;
+
+    // Compatibility: side panel on larger screens, summary button + dialog on phones.
     juce::Label compatTitle_;
     juce::ComboBox target_;
     juce::TextButton prepareButton_{"Prepare for iPhone & Android"};
+    juce::TextButton compatSummary_;
     juce::TextEditor compat_;
+    juce::String compatText_;
     std::unique_ptr<juce::FileChooser> chooser_;
 };
 
