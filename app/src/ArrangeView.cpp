@@ -274,7 +274,7 @@ public:
             startPinch();
             return;
         }
-        auto hit = hitTest(e.position);
+        auto hit = clipAt(e.position);
         drag_ = {};
         drag_.start = e.position;
         if (!hit) {
@@ -323,7 +323,7 @@ public:
     }
 
     void mouseDoubleClick(const juce::MouseEvent& e) override {
-        if (auto hit = hitTest(e.position)) {
+        if (auto hit = clipAt(e.position)) {
             const int64_t at = ynot::snapTick(owner_.xToTick(e.x), owner_.gridTicks());
             owner_.session_.edit([&](ynot::Project& p) { ynot::splitClip(p, hit->trackId, hit->clipId, at); });
         }
@@ -343,7 +343,7 @@ public:
     void mouseMagnify(const juce::MouseEvent& e, float scale) override { owner_.zoomAround(e.x, scale); }
 
     void mouseMove(const juce::MouseEvent& e) override {
-        auto hit = hitTest(e.position);
+        auto hit = clipAt(e.position);
         setMouseCursor(!hit ? juce::MouseCursor::NormalCursor
                        : hit->zone == DragMode::Move ? juce::MouseCursor::DraggingHandCursor
                                                      : juce::MouseCursor::LeftRightResizeCursor);
@@ -431,7 +431,7 @@ private:
         return std::nullopt;
     }
 
-    std::optional<Hit> hitTest(juce::Point<float> pos) const {
+    std::optional<Hit> clipAt(juce::Point<float> pos) const {
         auto row = laneAt(pos);
         if (!row) return std::nullopt;
         const float edge = owner_.layout_.minTouchTargetDp >= 44 ? 16.f : 7.f;

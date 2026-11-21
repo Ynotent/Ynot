@@ -183,7 +183,7 @@ public:
             int w = args[i + 2].getIntValue(), h = args[i + 3].getIntValue();
             auto* content = window_->getContentComponent();
             content->setSize(w, h);
-            juce::Timer::callAfterDelay(300, [this, content, png] {
+            juce::Timer::callAfterDelay(300, [content, png] {
                 auto img = content->createComponentSnapshot(content->getLocalBounds(), true, 2.0f);
                 png.deleteFile();
                 juce::FileOutputStream out(png);
