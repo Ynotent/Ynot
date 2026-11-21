@@ -20,7 +20,7 @@ Project editProject() {
     Track a;
     a.id = "a";
     a.kind = TrackKind::Audio;
-    a.audioClips = {{"c1", "m", 0, 4 * kBeat, 0, 0.0}};
+    a.audioClips = {{"c1", "m", 0, 4 * kBeat, 0, 0.0, {}, 0, 1.0, {}}};
     Track b;
     b.id = "b";
     b.kind = TrackKind::Audio;
@@ -54,7 +54,7 @@ TEST("edit: move a clip in time and onto another track of the same kind") {
 
 TEST("edit: moving an audio clip onto another replaces the overlapped part") {
     Project p = editProject();
-    p.findTrack("b")->audioClips = {{"c2", "m", 0, 4 * kBeat, 0, 0.0}};
+    p.findTrack("b")->audioClips = {{"c2", "m", 0, 4 * kBeat, 0, 0.0, {}, 0, 1.0, {}}};
     CHECK(moveClip(p, "a", "c1", 2 * kBeat, "b"));
     auto& clips = p.findTrack("b")->audioClips;
     CHECK_EQ(clips.size(), size_t(2));
@@ -206,7 +206,7 @@ TEST("plugins: add, reorder, bypass and remove effects; swap instruments") {
     take.channels = 1;
     take.samples.assign(48000, 0.5f);
     std::string mid = addMedia(p, dir, take, "recording").id;
-    p.findTrack("a")->audioClips = {{"c1", mid, 0, 2 * kBeat, 0, 0.0}};
+    p.findTrack("a")->audioClips = {{"c1", mid, 0, 2 * kBeat, 0, 0.0, {}, 0, 1.0, {}}};
     p.findTrack("k")->mute = true;
     PackageMediaProvider media(dir);
     BuiltinPluginHost host;

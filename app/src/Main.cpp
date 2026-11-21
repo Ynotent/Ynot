@@ -361,6 +361,34 @@ static int runSmokeTest(const juce::File& dir) {
         session.setSampleRate(48000);
     }
 
+    {   // Time stretch through the session: Poly to 150%, Mono back to 75%, undo, reset.
+        const ynot::AudioClip* clip = nullptr;
+        for (auto& c : session.project().findTrack(vocalsId)->audioClips) clip = &c;
+        const std::string clipId = clip ? clip->id : std::string();
+        const int64_t len = clip ? clip->lengthTick : 0;
+        auto find = [&]() -> const ynot::AudioClip* {
+            for (auto& c : session.project().findTrack(vocalsId)->audioClips)
+                if (c.id == clipId) return &c;
+            return nullptr;
+        };
+        auto err = session.stretchClipNow(vocalsId, clipId, 1.5, ynot::StretchMode::Poly);
+        const auto* c = find();
+        expect(err.isEmpty() && c && std::abs(c->lengthTick - len * 3 / 2) <= 2 &&
+                   ynot::clipStretchMode(*c) == ynot::StretchMode::Poly,
+               "time stretch (Poly) makes the clip 150% long");
+        err = session.stretchClipNow(vocalsId, clipId, 0.75, ynot::StretchMode::Mono);
+        c = find();
+        expect(err.isEmpty() && c && std::abs(c->lengthTick - len * 3 / 4) <= 2,
+               "re-stretching (Mono) works from the original length");
+        session.undo();
+        c = find();
+        expect(c && std::abs(c->lengthTick - len * 3 / 2) <= 2, "undo restores the previous stretch");
+        err = session.stretchClipNow(vocalsId, clipId, 1.0, ynot::StretchMode::Poly);
+        c = find();
+        expect(err.isEmpty() && c && std::abs(c->lengthTick - len) <= 1 && !ynot::clipStretchMode(*c),
+               "reset returns the clip to its original audio and length");
+    }
+
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     expect(ynot::projectToJson(reopened) == ynot::projectToJson(session.project()), "save/reopen is lossless");

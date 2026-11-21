@@ -16,6 +16,7 @@
 #include "ynot/project_format.hpp"
 #include "ynot/quantize.hpp"
 #include "ynot/recorder.hpp"
+#include "ynot/stretch.hpp"
 #include "ynot/ui_layout.hpp"
 
 namespace ynot {

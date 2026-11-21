@@ -91,6 +91,17 @@ public:
     // Same, synchronously on the calling (message) thread. Returns an error, or empty.
     juce::String importAudioFileNow(const juce::File& file, const std::string& trackId, int64_t startTick);
 
+    // Time stretch an audio clip. `ratio` is relative to the clip's original length (1 = reset).
+    // Rendering runs on a background thread; `done(error)` runs on the message thread.
+    void stretchClip(const std::string& trackId, const std::string& clipId, double ratio, ynot::StretchMode mode,
+                     std::function<void(const juce::String& error)> done);
+    juce::String stretchClipNow(const std::string& trackId, const std::string& clipId, double ratio,
+                                ynot::StretchMode mode);
+    bool isStretching() const { return stretchJobs_ > 0; }
+    // Mode used for clips that haven't been stretched yet (user preference).
+    void setDefaultStretchMode(ynot::StretchMode m) { defaultStretchMode_ = m; }
+    ynot::StretchMode defaultStretchMode() const { return defaultStretchMode_; }
+
     // Quantize (device/user preference, not stored in the project).
     void setRecordQuantize(const std::string& presetId);  // "" = off
     const std::string& recordQuantizeId() const { return recordQuantizeId_; }
@@ -197,6 +208,8 @@ private:
     static constexpr int64_t kNoSeek = std::numeric_limits<int64_t>::min();
     std::atomic<int64_t> pendingSeek_{kNoSeek};
     int simulatedInputs_ = 0;
+    int stretchJobs_ = 0;
+    ynot::StretchMode defaultStretchMode_ = ynot::StretchMode::Poly;
 };
 
 }  // namespace ynotapp

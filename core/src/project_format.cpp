@@ -141,6 +141,14 @@ Json trackToJson(const Track& t) {
         cj["lengthTick"] = c.lengthTick;
         cj["sourceOffsetFrames"] = c.sourceOffsetFrames;
         cj["gainDb"] = c.gainDb;
+        if (!c.stretchSourceMediaId.empty()) {
+            Json st = Json::object();
+            st["sourceMediaId"] = c.stretchSourceMediaId;
+            st["sourceOffsetFrames"] = c.stretchSourceOffsetFrames;
+            st["ratio"] = c.stretchRatio;
+            st["mode"] = c.stretchMode;
+            cj["stretch"] = st;
+        }
         ac.push(cj);
     }
     j["audioClips"] = ac;
@@ -208,6 +216,12 @@ Track trackFromJson(const Json& j) {
             c.lengthTick = cj.getInt("lengthTick", 0);
             c.sourceOffsetFrames = cj.getInt("sourceOffsetFrames", 0);
             c.gainDb = cj.getNumber("gainDb", 0);
+            if (auto* st = cj.find("stretch"); st && st->isObject()) {
+                c.stretchSourceMediaId = st->getString("sourceMediaId", "");
+                c.stretchSourceOffsetFrames = st->getInt("sourceOffsetFrames", 0);
+                c.stretchRatio = st->getNumber("ratio", 1.0);
+                c.stretchMode = st->getString("mode", "poly");
+            }
             t.audioClips.push_back(c);
         }
     if (auto* mc = j.find("midiClips"); mc && mc->isArray())

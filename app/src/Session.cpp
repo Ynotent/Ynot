@@ -422,6 +422,56 @@ void Session::importAudioFile(const juce::File& file, const std::string& trackId
     });
 }
 
+void Session::stretchClip(const std::string& trackId, const std::string& clipId, double ratio,
+                          ynot::StretchMode mode, std::function<void(const juce::String&)> done) {
+    if (!loaded_ || !media_) {
+        if (done) done("Open or create a project first.");
+        return;
+    }
+    std::string error;
+    auto job = ynot::prepareStretch(project_, *media_, trackId, clipId, ratio, mode, &error);
+    if (!job) {
+        if (done) done(error);
+        return;
+    }
+    ++stretchJobs_;
+    if (onChange) onChange();
+    auto shared = std::make_shared<ynot::StretchJob>(std::move(*job));
+    const auto dir = dir_;
+    juce::Thread::launch([this, shared, dir, done] {
+        auto rendered = std::make_shared<ynot::AudioBuffer>(ynot::renderStretch(*shared));
+        juce::MessageManager::callAsync([this, shared, dir, done, rendered] {
+            --stretchJobs_;
+            juce::String err;
+            if (dir != dir_) err = "The project was closed before the stretch finished.";
+            else if (!ynot::findClip(project_, shared->trackId, shared->clipId))
+                err = "The clip was deleted while it was being stretched.";
+            else {
+                bool ok = false;
+                edit([&](ynot::Project& p) { ok = ynot::commitStretch(p, dir_.getFullPathName().toStdString(), *shared, *rendered); });
+                if (ok) save();
+                else err = "The clip was changed or deleted while it was being stretched.";
+            }
+            if (onChange) onChange();
+            if (done) done(err);
+        });
+    });
+}
+
+juce::String Session::stretchClipNow(const std::string& trackId, const std::string& clipId, double ratio,
+                                     ynot::StretchMode mode) {
+    if (!loaded_ || !media_) return "Open or create a project first.";
+    std::string error;
+    auto job = ynot::prepareStretch(project_, *media_, trackId, clipId, ratio, mode, &error);
+    if (!job) return error;
+    const auto rendered = ynot::renderStretch(*job);
+    bool ok = false;
+    edit([&](ynot::Project& p) { ok = ynot::commitStretch(p, dir_.getFullPathName().toStdString(), *job, rendered); });
+    if (!ok) return "The clip couldn't be stretched.";
+    save();
+    return {};
+}
+
 juce::String Session::importAudioFileNow(const juce::File& file, const std::string& trackId, int64_t startTick) {
     if (!loaded_) return "Open or create a project first.";
     const auto decoded = decodeAudioFile(file);

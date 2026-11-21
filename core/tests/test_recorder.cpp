@@ -199,9 +199,9 @@ TEST("recorder: punch-in replaces only the overlapped part of existing clips") {
     p.media.push_back(m);
     Track& t = p.tracks[0];
     const int64_t beat = kTicksPerQuarter;
-    t.audioClips = {{"old", "m", 0, 4 * beat, 0, 0.0}};
+    t.audioClips = {{"old", "m", 0, 4 * beat, 0, 0.0, {}, 0, 1.0, {}}};
 
-    placeClipReplacing(p, t, {"new", "m", 1 * beat, 1 * beat, 0, 0.0});  // inside: split
+    placeClipReplacing(p, t, {"new", "m", 1 * beat, 1 * beat, 0, 0.0, {}, 0, 1.0, {}});  // inside: split
     CHECK_EQ(t.audioClips.size(), size_t(3));
     CHECK_EQ(t.audioClips[0].lengthTick, beat);
     CHECK_EQ(t.audioClips[1].id, std::string("new"));
@@ -209,11 +209,11 @@ TEST("recorder: punch-in replaces only the overlapped part of existing clips") {
     CHECK_EQ(t.audioClips[2].lengthTick, 2 * beat);
     CHECK_EQ(t.audioClips[2].sourceOffsetFrames, int64_t(48000));  // 2 beats in = 1 s
 
-    placeClipReplacing(p, t, {"cover", "m", 0, 2 * beat, 0, 0.0});  // covers first two
+    placeClipReplacing(p, t, {"cover", "m", 0, 2 * beat, 0, 0.0, {}, 0, 1.0, {}});  // covers first two
     CHECK_EQ(t.audioClips.size(), size_t(2));
     CHECK_EQ(t.audioClips[0].id, std::string("cover"));
 
-    placeClipReplacing(p, t, {"tail", "m", 3 * beat, 2 * beat, 0, 0.0});  // overlaps end
+    placeClipReplacing(p, t, {"tail", "m", 3 * beat, 2 * beat, 0, 0.0, {}, 0, 1.0, {}});  // overlaps end
     CHECK_EQ(t.audioClips[1].lengthTick, beat);  // old right part trimmed to [2,3)
     CHECK_EQ(t.audioClips[2].id, std::string("tail"));
 }
@@ -326,7 +326,7 @@ TEST("punch: audio replaces only the punch range of the existing take") {
     old.channels = 1;
     old.samples.assign(96000, 0.2f);
     std::string oldId = addMedia(p, dir, old, "recording").id;
-    p.findTrack("vox")->audioClips = {{"old", oldId, 0, 4 * kTicksPerQuarter, 0, 0.0}};
+    p.findTrack("vox")->audioClips = {{"old", oldId, 0, 4 * kTicksPerQuarter, 0, 0.0, {}, 0, 1.0, {}}};
 
     // Punch in at beat 1 (24000), out at beat 2 (48000). Transport runs the whole 2 s;
     // the performer sings a constant 0.7 throughout, but only the range is kept.

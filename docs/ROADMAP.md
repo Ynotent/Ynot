@@ -188,6 +188,34 @@ Done so far (built and tested on the Linux dev host only):
     surround and RF64 (long recordings). Each is checked for exact length, sample rate and
     level against 8 fixture files.
   - Surround (5.1/7.1) is folded down to stereo: centre and surrounds at −3 dB, LFE left out.
+
+- **Sample rate:**
+  - Toolbar menu (More on phones): 44.1, 48, 88.2, 96 and 192 kHz, plus any other rate the
+    interface offers. Rates the device can't do are greyed out.
+  - Saved with the project. Opening it switches the device to that rate when supported;
+    otherwise audio at other rates is resampled on playback, so it still plays correctly.
+  - Fixed: a rate or buffer change made in Audio settings left the engine running at the
+    old rate (wrong speed and pitch). Any device change now updates the engine and keeps
+    the playhead at the same musical position.
+  - Tested in simulation (switching rates, a 1 s take at 96 kHz spans exactly 1 s, the
+    project remembers the rate). Not yet tested on a real interface.
+
+- **Time stretch** (shared core, `ynot/stretch.hpp`; identical results on every platform):
+  - Modes per clip:
+    - **Mono** (WSOLA) for vocals, bass and solo instruments;
+    - **Poly** (phase vocoder with phase locking and transient reset) for chords, pads,
+      mixes and loops;
+    - **Varispeed**: tape-style, so pitch follows speed (band-limited resampling, no aliasing).
+  - How: Option/Alt-drag a clip's right edge, or the clip menu → Time stretch (25–400%
+    presets, Fit to whole bars, Match tempo…, Custom…, Reset).
+  - Non-destructive: every stretch is rendered again from the original audio, so repeated
+    stretches don't degrade; Reset restores the original exactly, and split clips map
+    back to their own part of the original. The render is ordinary media, so other
+    devices play it without re-rendering. Undoable.
+  - Renders on a background thread: about 2–4 s for a 3-minute stereo song.
+  - Tests check that pitch is kept (Mono/Poly), each chord note stays in tune,
+    Poly at 100% reproduces the input, Varispeed shifts pitch without aliasing, and there
+    are no clicks. Listening tests on real material are still to do.
     The channel map comes from the file when present.
   - Found while testing: the first version kept only front-left/right, so a 5.1 file with
     dialogue in the centre imported as silence. Fixed.

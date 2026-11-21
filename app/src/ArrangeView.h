@@ -39,6 +39,11 @@ public:
     // Track menu: instrument, effects (add/open/bypass/reorder/remove), freeze, rename, delete.
     void showTrackMenu(const std::string& trackId, juce::Component* target);
     void renameTrackDialog(const std::string& trackId, const std::string& current);
+    // Time stretch (ratio relative to the clip's original length); errors are shown in a dialog.
+    void stretchClip(const std::string& trackId, const std::string& clipId, double ratio, ynot::StretchMode mode);
+    void matchTempoDialog(const std::string& trackId, const std::string& clipId, ynot::StretchMode mode);
+    void customStretchDialog(const std::string& trackId, const std::string& clipId, ynot::StretchMode mode,
+                             double currentRatio);
 
     // Audio import hooks (set by the main window).
     std::function<void(const juce::Array<juce::File>&, const std::string& trackId, int64_t startTick)> onImportFiles;

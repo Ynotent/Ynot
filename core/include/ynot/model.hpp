@@ -39,6 +39,12 @@ struct AudioClip {
     int64_t lengthTick = 0;
     int64_t sourceOffsetFrames = 0;  // in the media's own sample rate
     double gainDb = 0.0;
+    // Time stretch (see stretch.hpp). Empty stretchSourceMediaId = not stretched; otherwise
+    // mediaId is a render of the original audio and these fields point back to it.
+    std::string stretchSourceMediaId;
+    int64_t stretchSourceOffsetFrames = 0;  // original frame at the render's frame 0
+    double stretchRatio = 1.0;              // length / original length
+    std::string stretchMode;                // "mono", "poly", "varispeed"
 };
 
 struct MidiNote {

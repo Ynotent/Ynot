@@ -5,6 +5,7 @@
 #include "AudioImporter.h"
 #include "QuantizeMenus.h"
 #include "ynot/edit.hpp"
+#include "ynot/stretch.hpp"
 
 namespace ynotapp {
 
@@ -380,6 +381,8 @@ public:
         owner_.selected_ = {hit->trackId, hit->clipId};
         drag_.clip = *hit;
         drag_.mode = hit->zone;
+        // Option/Alt + drag the right edge = time stretch (audio clips).
+        if (hit->zone == DragMode::TrimEnd && hit->audio && e.mods.isAltDown()) drag_.mode = DragMode::Stretch;
         if (e.mods.isPopupMenu()) {
             drag_.mode = DragMode::None;
             showMenu(e.position);
@@ -411,7 +414,8 @@ public:
             if (touches_.empty()) drag_ = {};
             return;
         }
-        if (drag_.mode != DragMode::None && drag_.moved) commitDrag();
+        if (drag_.mode == DragMode::Stretch && drag_.moved) commitStretchDrag();
+        else if (drag_.mode != DragMode::None && drag_.moved) commitDrag();
         drag_ = {};
         repaint();
     }
@@ -472,7 +476,7 @@ public:
     }
 
 private:
-    enum class DragMode { None, Move, TrimStart, TrimEnd, Pinch };
+    enum class DragMode { None, Move, TrimStart, TrimEnd, Stretch, Pinch };
     struct Hit {
         std::string trackId, clipId;
         DragMode zone;
@@ -531,6 +535,14 @@ private:
             } else {
                 g.setFont(juce::FontOptions(th.bodySize - 1.f));
                 g.drawText("Audio not on this device yet", inner, juce::Justification::centredLeft, true);
+            }
+            if (const auto mode = ynot::clipStretchMode(*audio)) {  // e.g. "150% Poly"
+                const auto label = juce::String(static_cast<int>(std::lround(ynot::clipStretchRatio(*audio) * 100))) +
+                                   "% " + ynot::stretchModeName(*mode);
+                g.setFont(juce::FontOptions(th.bodySize - 2.f));
+                auto tag = inner.withHeight(th.bodySize + 2.f).withTrimmedLeft(2.f);
+                g.setColour(th.text.withAlpha(0.85f));
+                g.drawText(label, tag, juce::Justification::topLeft, true);
             }
         } else if (midi && !midi->notes.empty()) {
             int lo = 127, hi = 0;
@@ -602,6 +614,7 @@ private:
             }
             case DragMode::TrimStart: s = std::min(ynot::snapTick(s + dragDeltaTicks(), grid), e - ynot::kMinClipTicks); break;
             case DragMode::TrimEnd: e = std::max(ynot::snapTick(e + dragDeltaTicks(), grid), s + ynot::kMinClipTicks); break;
+            case DragMode::Stretch: e = s + stretchedLength(); break;
             case DragMode::None:
             case DragMode::Pinch: return std::nullopt;
         }
@@ -630,11 +643,38 @@ private:
                 case DragMode::TrimEnd:
                     ynot::trimClipEnd(p, c.trackId, c.clipId, ynot::snapTick(c.startTick + c.lengthTick + delta, grid));
                     break;
+                case DragMode::Stretch:
                 case DragMode::None:
                 case DragMode::Pinch: break;
             }
         });
         if (drag_.mode == DragMode::Move) owner_.selected_.trackId = target;
+    }
+
+    // ---- time stretch
+    const ynot::AudioClip* audioClip(const std::string& trackId, const std::string& clipId) const {
+        if (const auto* t = owner_.session_.project().findTrack(trackId))
+            for (auto& a : t->audioClips)
+                if (a.id == clipId) return &a;
+        return nullptr;
+    }
+    // New length while Option-dragging, kept inside the 25%..400% range of the original.
+    int64_t stretchedLength() const {
+        const auto c = drag_.clip;
+        const auto* a = audioClip(c.trackId, c.clipId);
+        const double cur = a ? ynot::clipStretchRatio(*a) : 1.0;
+        const double original = static_cast<double>(c.lengthTick) / cur;
+        const int64_t want = ynot::snapTick(c.startTick + c.lengthTick + dragDeltaTicks(), owner_.gridTicks()) - c.startTick;
+        return std::clamp<int64_t>(want, static_cast<int64_t>(std::ceil(original * ynot::kMinStretchRatio)),
+                                   static_cast<int64_t>(std::floor(original * ynot::kMaxStretchRatio)));
+    }
+    void commitStretchDrag() {
+        const auto c = drag_.clip;
+        const auto* a = audioClip(c.trackId, c.clipId);
+        if (!a || c.lengthTick <= 0) return;
+        const double ratio = ynot::clipStretchRatio(*a) * static_cast<double>(stretchedLength()) /
+                             static_cast<double>(c.lengthTick);
+        owner_.stretchClip(c.trackId, c.clipId, ratio, ynot::clipStretchMode(*a).value_or(owner_.session_.defaultStretchMode()));
     }
 
     void showMenu(juce::Point<float> at) {
@@ -650,6 +690,8 @@ private:
             m.addSubMenu("Quantize", quantizePresetMenu({}, [this, c](const std::string& id) {
                 owner_.session_.quantizeClip(c.trackId, c.clipId, id);
             }, false));
+        if (const auto* a = c.audio ? audioClip(c.trackId, c.clipId) : nullptr)
+            m.addSubMenu("Time stretch", stretchMenu(c, *a));
         m.addItem("Set punch range to this clip", [this, c] {
             owner_.session_.setPunchRange(c.startTick, c.startTick + c.lengthTick);
             owner_.session_.setPunchEnabled(true);
@@ -659,6 +701,41 @@ private:
         m.addItem("Delete", [this] { owner_.deleteSelected(); });
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
             juce::Rectangle<int>(1, 1).withPosition(localPointToGlobal(at.toInt()))));
+    }
+
+    juce::PopupMenu stretchMenu(const Hit& c, const ynot::AudioClip& a) {
+        auto& session = owner_.session_;
+        const double cur = ynot::clipStretchRatio(a);
+        const auto clipMode = ynot::clipStretchMode(a);
+        const auto mode = clipMode.value_or(session.defaultStretchMode());
+        juce::PopupMenu m;
+        m.addSectionHeader("Mode");
+        struct M { ynot::StretchMode mode; const char* label; };
+        for (auto [md, label] : {M{ynot::StretchMode::Mono, "Mono: vocals, bass, solo instruments"},
+                                 M{ynot::StretchMode::Poly, "Poly: chords, pads, full mixes, loops"},
+                                 M{ynot::StretchMode::Varispeed, "Varispeed: tape speed (pitch follows)"}})
+            m.addItem(label, true, md == mode, [this, &session, c, cur, clipMode, md = md] {
+                session.setDefaultStretchMode(md);
+                if (clipMode && *clipMode != md) owner_.stretchClip(c.trackId, c.clipId, cur, md);  // re-render
+            });
+        m.addSectionHeader("Length (of the original)");
+        for (double r : {0.5, 2.0 / 3.0, 0.75, 1.25, 1.5, 2.0}) {
+            const auto pct = juce::String(static_cast<int>(std::lround(r * 100))) + "%";
+            const char* hint = r < 0.51 ? "  (double speed)" : r > 1.99 ? "  (half speed)" : "";
+            m.addItem(pct + hint, true, std::abs(r - cur) < 1e-3,
+                      [this, c, r, mode] { owner_.stretchClip(c.trackId, c.clipId, r, mode); });
+        }
+        m.addItem("Fit to whole bars", [this, c, mode] {
+            if (const auto* x = audioClip(c.trackId, c.clipId))
+                owner_.stretchClip(c.trackId, c.clipId, ynot::ratioToFitBars(owner_.session_.project(), *x), mode);
+        });
+        m.addItem("Match tempo...", [this, c, mode] { owner_.matchTempoDialog(c.trackId, c.clipId, mode); });
+        m.addItem("Custom...", [this, c, mode, cur] { owner_.customStretchDialog(c.trackId, c.clipId, mode, cur); });
+        m.addSeparator();
+        m.addItem("Reset to original length", clipMode.has_value(), false,
+                  [this, c, mode] { owner_.stretchClip(c.trackId, c.clipId, 1.0, mode); });
+        m.addItem("Tip: Option-drag (Alt on Windows) the clip's right edge", false, false, [] {});
+        return m;
     }
 
     // Long-press = context menu on touch screens.
@@ -953,6 +1030,56 @@ void ArrangeView::renameTrackDialog(const std::string& trackId, const std::strin
             const auto name = w->getTextEditorContents("name").trim().toStdString();
             safe->session_.edit([&](ynot::Project& p) { ynot::renameTrack(p, trackId, name); });
         }
+    }), true);
+}
+
+void ArrangeView::stretchClip(const std::string& trackId, const std::string& clipId, double ratio,
+                              ynot::StretchMode mode) {
+    session_.setDefaultStretchMode(mode);
+    session_.stretchClip(trackId, clipId, ratio, mode, [](const juce::String& err) {
+        if (err.isNotEmpty())
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Time stretch", err);
+    });
+}
+
+void ArrangeView::matchTempoDialog(const std::string& trackId, const std::string& clipId, ynot::StretchMode mode) {
+    auto* w = new juce::AlertWindow("Match tempo",
+                                    "What tempo was this audio recorded at? It will be stretched to play at " +
+                                        juce::String(session_.project().tempoBpm, 1) + " BPM.",
+                                    juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("bpm", "", "Original BPM");
+    w->addButton("Stretch", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<ArrangeView> safe(this);
+    w->enterModalState(true, juce::ModalCallbackFunction::create([safe, w, trackId, clipId, mode](int result) {
+        if (result != 1 || !safe) return;
+        const double bpm = w->getTextEditorContents("bpm").trim().getDoubleValue();
+        if (bpm < 20 || bpm > 400) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Match tempo",
+                                                   "Enter a tempo between 20 and 400 BPM.");
+            return;
+        }
+        safe->stretchClip(trackId, clipId, ynot::ratioForTempo(safe->session_.project(), bpm), mode);
+    }), true);
+}
+
+void ArrangeView::customStretchDialog(const std::string& trackId, const std::string& clipId, ynot::StretchMode mode,
+                                      double currentRatio) {
+    auto* w = new juce::AlertWindow("Time stretch", "New length as a percentage of the original (25 to 400).",
+                                    juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("pct", juce::String(currentRatio * 100.0, 1), "Percent");
+    w->addButton("Stretch", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<ArrangeView> safe(this);
+    w->enterModalState(true, juce::ModalCallbackFunction::create([safe, w, trackId, clipId, mode](int result) {
+        if (result != 1 || !safe) return;
+        const double pct = w->getTextEditorContents("pct").retainCharacters("0123456789.").getDoubleValue();
+        if (pct < 25 || pct > 400) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Time stretch",
+                                                   "Enter a length between 25% and 400%.");
+            return;
+        }
+        safe->stretchClip(trackId, clipId, pct / 100.0, mode);
     }), true);
 }
 

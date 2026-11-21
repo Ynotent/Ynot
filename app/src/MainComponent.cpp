@@ -274,6 +274,7 @@ void MainComponent::timerCallback() {
     if (keyboard_.isVisible() && armedInstrument.isNotEmpty())
         s << (keyboard_.hasKeyboardFocus(false) ? "   Type A-K to play notes"
                                                 : "   Click the piano to play notes with A-K");
+    if (session_.isStretching()) s << "   Stretching clip...";
     const auto virtualOut = session_.device().virtualDeviceWarning();
     if (!virtualOut.empty()) {
         // The most common "I hear nothing": the Mac's default output is a loopback driver.
