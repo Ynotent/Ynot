@@ -106,7 +106,9 @@ private:
 
 JucePluginHost::JucePluginHost() {
     const auto platform = ynot::currentPlatform();
-#if JUCE_PLUGINHOST_VST3
+// VST3 hosting exists only on desktop; on iOS/Android JUCE declares the class without an
+// implementation, so it must not even be compiled there.
+#if JUCE_PLUGINHOST_VST3 && (JUCE_MAC || JUCE_WINDOWS || JUCE_LINUX)
     if (ynot::platformLoadsFormat(platform, ynot::PluginFormat::VST3))
         formats_.addFormat(new juce::VST3PluginFormat());
 #endif
