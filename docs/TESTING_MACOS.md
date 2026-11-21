@@ -1,0 +1,57 @@
+# Testing Ynot on a Mac (M1 real-device testing)
+
+This is the first real-device testing for **M1 (macOS alpha)**. It works on any Apple Silicon
+Mac. It has two parts: an automated script (about 10 minutes, mostly waiting), then about
+20 minutes of hands-on checks that need your ears and hands.
+
+## 1. Automated checks
+
+You need **Xcode** (App Store) or the Command Line Tools (`xcode-select --install`), plus
+**CMake** (`brew install cmake`).
+
+```sh
+git clone -b claude/universal-cross-platform-music-mufnfc https://github.com/Ynotent/Ynot.git ~/Ynot
+cd ~/Ynot
+./tools/macos-test.sh
+```
+
+The script builds everything in `build-macos/`, runs all automated tests on your Mac, and
+writes **`ynot-macos-report.txt`**. Paste that file's contents back to Claude, whether it
+passes or fails.
+
+## 2. Hands-on checks
+
+Launch the app with the `open ...` command printed at the end of the script. For each step,
+note **OK** or what went wrong. Short notes are fine, e.g. "4: clip landed about half a beat
+late".
+
+Use **headphones** for steps 5 and 6. Speakers plus the built-in mic will feed back.
+
+| # | Do this | Expected |
+|---|---|---|
+| 1 | Look at the status line (top right). | Shows `CoreAudio:` and your output device. |
+| 2 | **More/New Demo**, then **Play**. | You hear a steady tone (Vocals) and chords (Keys). Strings is silent because its plugin doesn't exist. The playhead moves; **Play** turns to **Stop**. |
+| 3 | **Audio** → pick another output (e.g. headphones vs speakers) and buffer sizes 64 / 256 / 1024. Play each. | Sound follows the device with no crackles. Note any buffer size that crackles. |
+| 4 | Turn on **Click** and play. | A click on every beat, accented on beat 1. |
+| 5 | Arm **Vocals (R)**, turn on **Count-in**, press **Record**, clap on beats 1–4 of bar 2, press **Stop Rec**. | macOS asks for microphone permission the first time; allow it. A new clip appears. On playback, the claps line up with the clicks. *Write down "early", "late" or "on time".* |
+| 6 | With Vocals armed, turn on **Monitor** and speak. | You hear yourself in the headphones. The status line shows a latency figure in ms; note it. |
+| 7 | Arm **Keys (R)**, press **Keys** and click notes on the on-screen keyboard. | The synth plays. If you have a USB/Bluetooth MIDI keyboard, plug it in **before** launching the app and play it too. |
+| 8 | With Keys armed, **Record**, play a few notes, **Stop Rec**. | A MIDI clip with your notes appears, in time. |
+| 9 | Drag a clip; drag its edges; double-click to split; select and press Delete; then **Cmd+Z** a few times. | Everything works, and undo steps back through it. Also try a trackpad pinch to zoom and a two-finger swipe to scroll. |
+| 10 | **Scan Plugins**, if you have third-party AU/VST3 plugins installed. | It finishes. *If the app crashes here, note which plugin was scanning; out-of-process scanning is a known M1 TODO.* |
+| 11 | **Save**, quit, relaunch and **Open** the project (`~/Documents/Ynot/Demo Song.ynot`). | Everything comes back exactly as saved. |
+| 12 | Change the **Open this project on** menu between iPhone/iPad, Android and Windows. | The report explains which plugins won't work where, and what to do. |
+
+Also note anything that feels wrong, looks wrong, or is confusing. That's as useful as the
+checklist.
+
+## What this does and doesn't prove
+
+Passing this makes the M2 MacBook the first **real-device** result for macOS. M1's full gate
+(see `docs/ROADMAP.md`) also needs:
+- an Intel Mac;
+- three audio interfaces;
+- a one-hour stability run;
+- a 20-plugin load and freeze suite.
+
+So one MacBook moves macOS forward but doesn't complete M1 on its own.
