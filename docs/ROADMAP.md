@@ -17,7 +17,7 @@ real-device test matrix for that milestone has been completed and signed off.**
 and the headless smoke test pass, and the UI was rendered at phone, tablet and desktop sizes.
 Nothing has been built for macOS, Windows or iOS yet.
 
-Core: verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 41/41
+Core: verified locally only on Linux (GCC 13 with ASan/UBSan, and Clang with `-Werror`): 44/44
 tests pass. The macOS, Windows, iOS and Android CI jobs are defined in
 `.github/workflows/ci.yml` but **have not run yet**. Once they pass, a platform moves to
 `core-compiles`. None of these statuses means the app is usable on that platform.
@@ -55,12 +55,19 @@ Done so far (built and tested on the Linux dev host only):
   - Per-track arm and input selection. Input choices stay on the device and are never saved
     into the project.
   - Metronome on live output only, never in bounces or freezes.
+  - Count-in (1 bar): the transport pre-rolls with a click and only the audio from the record
+    point onward is kept.
+  - Input monitoring: armed tracks are heard through their own inserts, fader and pan, with the
+    transport stopped too. The status bar shows the round-trip latency the driver reports.
+    Monitoring is a device setting and is off by default to avoid feedback through laptop and
+    phone speakers.
   - Microphone permission handling for Android.
 
 Still to do:
 - Build and run on a real Mac; out-of-process plugin hosting and scanning; plugin editor windows.
-- Input monitoring (software monitoring with latency display); count-in; loop/cycle recording
-  with take lanes.
+- Loop/cycle recording with take lanes; count-in length choice (currently 1 bar).
+- On phones, move file actions (New/Open/Save/Audio) into a menu so the transport gets the
+  space. The toolbar currently wraps onto four rows.
 - MIDI recording from controllers onto instrument tracks.
 - Recording latency calibration tool (loopback test). Driver-reported latency is often wrong
   by a few milliseconds.

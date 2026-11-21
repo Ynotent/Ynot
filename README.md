@@ -13,7 +13,7 @@ one account and one project format, not four separate apps.
 | Path | Contents |
 |---|---|
 | `core/` | **`ynot_core`**, the portable C++20 library shared by every platform: project model, universal `.ynot` format, audio engine, compatibility and freeze, real-time collaboration, responsive layout rules, entitlements and AI gating. |
-| `core/tests/` | Unit tests (41), dependency-free |
+| `core/tests/` | Unit tests (44), dependency-free |
 | `app/` | **The Ynot app**: one JUCE application for all four platforms (audio devices, VST3/AU/AUv3 hosting, responsive UI). Started in M1; dev-host builds only so far. |
 | `tools/ynot-cli/` | `ynot` CLI: create, inspect, compatibility-check and render projects |
 | `apps/{macos,windows,ios,android}/` | Platform-specific notes (packaging, store, test plans) |

@@ -62,9 +62,13 @@ void Session::rebuild() {
     ynot::EngineOptions opts;
     opts.sampleRate = sampleRate_;
     opts.maxBlock = blockSize_;
+    if (monitoring_.load())
+        for (const auto* t : project_.orderedTracks())
+            if (t->armed && t->kind == ynot::TrackKind::Audio) opts.monitorInputs[t->id] = inputFor(t->id);
     fresh->prepare(project_, *media_, host_, opts);
     fresh->seek(position_.load());
     fresh->setMetronome(metronomeOn_.load());
+    fresh->setForcedClickUntil(forcedClickUntil_);
     issues_ = fresh->issues();
 
     ynot::Engine* old = active_.exchange(fresh);
@@ -136,7 +140,8 @@ void Session::cycleInput(const std::string& trackId) {
     size_t i = 0;
     while (i < choices.size() && choices[i] != current) ++i;
     inputs_[trackId] = choices[(i + 1) % choices.size()];
-    if (onChange) onChange();
+    if (monitoring_.load()) rebuild();  // rebuild() notifies the UI
+    else if (onChange) onChange();
 }
 
 std::string Session::inputLabel(const std::string& trackId) const {
@@ -162,10 +167,19 @@ bool Session::startRecording(std::string& error) {
         error = "The current audio device has no inputs enabled. Choose an input in Audio settings.";
         return false;
     }
+    // Count-in: start the transport early so the performer hears the click,
+    // but only record from the current position.
+    const int64_t recordStart = std::max<int64_t>(0, position_.load());
+    const int64_t countIn = ynot::tickToFrame(project_, int64_t(countInBars_) * project_.timeSigNumerator *
+                                                            ynot::kTicksPerQuarter, sampleRate_);
+    cfg.startAtFrame = recordStart;
     if (!recorder_.start(cfg)) {
         error = recorder_.error();
         return false;
     }
+    forcedClickUntil_ = countIn > 0 ? recordStart : std::numeric_limits<int64_t>::min();
+    position_ = recordStart - countIn;
+    rebuild();  // engine starts at the pre-roll position with the count-in click
     draining_ = true;
     drainThread_ = std::thread([this] {
         while (draining_.load()) {
@@ -189,6 +203,8 @@ Session::RecordResult Session::stopRecording() {
     draining_ = false;
     if (drainThread_.joinable()) drainThread_.join();
     auto takes = recorder_.finish();
+    forcedClickUntil_ = std::numeric_limits<int64_t>::min();
+    position_ = std::max<int64_t>(0, position_.load());
     result.droppedFrames = recorder_.droppedFrames();
     result.error = recorder_.error();
     const int latency = device_.manager().getCurrentAudioDevice() ? ynot::recordingOffsetFrames(device_) : 0;
@@ -200,6 +216,19 @@ Session::RecordResult Session::stopRecording() {
 
 double Session::recordingSeconds() const {
     return static_cast<double>(recorder_.recordedFrames()) / sampleRate_;
+}
+
+void Session::setMonitoring(bool on) {
+    monitoring_ = on;
+    rebuild();
+}
+
+double Session::monitoringLatencyMs() const {
+    auto* d = device_.manager().getCurrentAudioDevice();
+    if (!d) return 0.0;
+    const double frames = d->getInputLatencyInSamples() + d->getOutputLatencyInSamples() +
+                          d->getCurrentBufferSizeSamples();
+    return frames / d->getCurrentSampleRate() * 1000.0;
 }
 
 void Session::setMetronome(bool on) {
@@ -229,11 +258,15 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
     if (engine && recording_.load()) recorder_.capture(ins, numIns, frames, engine->position());
     float* l = numOuts > 0 ? outs[0] : scratchL_.data();
     float* r = numOuts > 1 ? outs[1] : scratchR_.data();
-    if (engine && playing_.load()) {
+    const bool running = playing_.load();
+    if (engine && (running || monitoring_.load())) {
         // Drivers may deliver blocks larger than requested; render in chunks.
+        const float* chunkIns[16] = {};
+        const int numChunkIns = std::min(numIns, 16);
         for (int done = 0; done < frames;) {
             int n = std::min(frames - done, engine->maxBlock());
-            engine->process(l + done, r + done, n);
+            for (int c = 0; c < numChunkIns; ++c) chunkIns[c] = ins[c] ? ins[c] + done : nullptr;
+            engine->process(l + done, r + done, n, chunkIns, numChunkIns, running);
             done += n;
         }
         position_ = engine->position();

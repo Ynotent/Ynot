@@ -241,3 +241,78 @@ TEST("engine: metronome clicks on beats in live output only") {
     AudioBuffer bounce = renderProject(p, media, host, 48000, 1.0);
     CHECK(th::rms(bounce) == 0.0);        // never in bounces
 }
+
+TEST("engine: input monitoring runs through inserts, fader and pan, even when stopped") {
+    Track* vox = nullptr;
+    Project p = emptyProject(&vox);
+    auto gain = makeBuiltin(kBuiltinGain, "Gain");
+    gain.params["gainDb"] = -6.0;
+    p.tracks[0].inserts.push_back(gain);
+    p.tracks[0].pan = -1.0;
+    Track other;
+    other.id = "gtr";
+    other.name = "Guitar";
+    p.tracks.push_back(other);
+
+    PackageMediaProvider media(th::tempDir("mon"));
+    BuiltinPluginHost host;
+    Engine e;
+    EngineOptions o;
+    o.maxBlock = 256;
+    o.monitorInputs = {{"vox", {0}}};  // only the vocal track monitors input 1
+    e.prepare(p, media, host, o);
+    std::vector<float> in(256, 0.5f), l(256), r(256);
+    const float* ins[1] = {in.data()};
+    e.process(l.data(), r.data(), 256, ins, 1, /*transportRunning=*/false);
+    const double expected = 0.5 * dbToGain(-6.0) * std::sqrt(2.0);  // hard-left pan law
+    CHECK_NEAR(l[100], expected, 1e-4);
+    CHECK_NEAR(r[100], 0.0, 1e-6);
+    CHECK_EQ(e.position(), int64_t(0));  // stopped transport doesn't move
+
+    p.tracks[0].mute = true;  // muting the track also mutes its monitoring
+    e.prepare(p, media, host, o);
+    e.process(l.data(), r.data(), 256, ins, 1, false);
+    CHECK_EQ(l[100], 0.0f);
+}
+
+TEST("engine: count-in clicks before the record point even with the metronome off") {
+    Project p = emptyProject(nullptr);
+    PackageMediaProvider media(th::tempDir("countin"));
+    BuiltinPluginHost host;
+    Engine e;
+    EngineOptions o;
+    o.maxBlock = 480;
+    e.prepare(p, media, host, o);
+    e.seek(-48000);  // one 2-beat pre-roll at 120 BPM
+    e.setForcedClickUntil(0);
+    std::vector<float> l(96000), r(96000);
+    for (int done = 0; done < 96000; done += 480) e.process(l.data() + done, r.data() + done, 480);
+    auto energy = [&](int from, int to) {
+        double s = 0;
+        for (int i = from; i < to; ++i) s += l[static_cast<size_t>(i)] * l[static_cast<size_t>(i)];
+        return s;
+    };
+    CHECK(energy(0, 1440) > 0.1);          // engine frame -48000
+    CHECK(energy(24000, 25440) > 0.1);     // engine frame -24000
+    CHECK(energy(48000, 96000) == 0.0);    // from the record point on: no click
+    CHECK_EQ(e.position(), int64_t(48000));
+}
+
+TEST("recorder: input during the count-in is not recorded") {
+    auto dir = th::tempDir("rec-countin");
+    Recorder rec;
+    Recorder::Config cfg;
+    cfg.targets = {{"vox", {0}}};
+    cfg.packageDir = dir;
+    cfg.startAtFrame = 0;
+    CHECK(rec.start(cfg));
+    std::vector<float> sig(5000);
+    for (size_t i = 0; i < sig.size(); ++i) sig[i] = static_cast<float>(i) / 10000.0f;
+    feed(rec, sig, -1000);  // capture starts 1000 frames before the record point
+    auto takes = rec.finish();
+    CHECK_EQ(takes.size(), size_t(1));
+    CHECK_EQ(takes[0].startFrame, int64_t(0));
+    CHECK_EQ(takes[0].frames, int64_t(4000));
+    AudioBuffer got = decodeWav(readFileBytes(takes[0].tempPath));
+    CHECK_NEAR(got.samples[0], 0.1, 1e-6);  // first recorded sample is input index 1000
+}

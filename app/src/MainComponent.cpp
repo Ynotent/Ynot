@@ -122,8 +122,12 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     setLookAndFeel(&lnf_);
 
     for (auto* b : {&newButton_, &openButton_, &saveButton_, &playButton_, &recordButton_, &clickButton_,
-                    &audioButton_, &scanButton_})
+                    &countInButton_, &monitorButton_, &audioButton_, &scanButton_})
         addAndMakeVisible(*b);
+    countInButton_.setClickingTogglesState(true);
+    countInButton_.onClick = [this] { session_.setCountInBars(countInButton_.getToggleState() ? 1 : 0); };
+    monitorButton_.setClickingTogglesState(true);
+    monitorButton_.onClick = [this] { session_.setMonitoring(monitorButton_.getToggleState()); };
     recordButton_.setColour(juce::TextButton::buttonOnColourId, theme_.record);
     recordButton_.onClick = [this] { toggleRecording(); };
     clickButton_.setClickingTogglesState(true);
@@ -188,8 +192,8 @@ void MainComponent::resized() {
     const bool compact = layout_.layout == ynot::LayoutClass::Compact;
     const int buttonWidth = compact ? std::max(target * 2, 84) : 110;
     auto bar = r.removeFromTop(target);
-    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &newButton_, &openButton_, &saveButton_,
-                    &audioButton_, &scanButton_}) {
+    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &newButton_,
+                    &openButton_, &saveButton_, &audioButton_, &scanButton_}) {
         if (!b->isVisible()) continue;
         if (bar.getWidth() < buttonWidth) {
             r.removeFromTop(6);
@@ -259,11 +263,13 @@ juce::Component* MainComponent::refreshComponentForRow(int row, bool, juce::Comp
 
 void MainComponent::timerCallback() {
     if (!session_.hasProject()) return;
+    auto* dev = session_.device().manager().getCurrentAudioDevice();
     juce::String s;
     s << juce::String(session_.project().name) << "   ";
     s << juce::String(session_.positionSeconds(), 1) << " s   ";
     if (session_.isRecording()) s << "REC " << juce::String(session_.recordingSeconds(), 1) << " s   ";
-    auto* dev = session_.device().manager().getCurrentAudioDevice();
+    if (session_.monitoring() && dev)
+        s << "monitor " << juce::String(session_.monitoringLatencyMs(), 1) << " ms   ";
     s << (dev ? dev->getTypeName() + ": " + dev->getName() : juce::String("no audio device"));
     status_.setText(s, juce::dontSendNotification);
 }

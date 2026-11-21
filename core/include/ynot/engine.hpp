@@ -12,6 +12,7 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -91,6 +92,8 @@ struct EngineOptions {
     // When set, render only this track, pre-fader and ignoring mute/solo and
     // its own freeze (used to create freezes).
     std::string isolateTrackPreFader;
+    // Live input monitoring: track id -> input channel(s) (1 = mono, 2 = stereo pair).
+    std::map<std::string, std::vector<int>> monitorInputs;
 };
 
 class Engine {
@@ -101,13 +104,18 @@ public:
     void prepare(const Project& project, MediaProvider& media, PluginHost& host,
                  const EngineOptions& opts);
     // Realtime-safe. Renders the next `frames` (<= maxBlock) into non-interleaved stereo.
-    void process(float* left, float* right, int frames);
+    // `inputs` feed monitored tracks. With transportRunning=false, the position holds,
+    // clips/MIDI don't play, but monitored input and effect tails still sound.
+    void process(float* left, float* right, int frames, const float* const* inputs = nullptr,
+                 int numInputs = 0, bool transportRunning = true);
     void seek(int64_t frame);
     int64_t position() const { return pos_; }
     int maxBlock() const { return opts_.maxBlock; }
     // Live-only click (never part of bounces or freezes). Realtime-safe toggle.
     void setMetronome(bool on) { metronome_.store(on); }
     bool metronome() const { return metronome_.load(); }
+    // Count-in: click sounds for frames before `frame` even with the metronome off.
+    void setForcedClickUntil(int64_t frame) { clickUntil_.store(frame); }
     const std::vector<EngineIssue>& issues() const { return issues_; }
 
 private:
@@ -119,6 +127,7 @@ private:
     int64_t pos_ = 0;
     std::vector<float> scratchL_, scratchR_;
     std::atomic<bool> metronome_{false};
+    std::atomic<int64_t> clickUntil_{std::numeric_limits<int64_t>::min()};
     int beatsPerBar_ = 4;
     int clickRemaining_ = 0;
     double clickPhase_ = 0, clickInc_ = 0;

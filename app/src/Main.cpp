@@ -48,8 +48,19 @@ static int runSmokeTest(const juce::File& dir) {
     session.edit([&](ynot::Project& p) {
         for (auto& t : p.tracks) t.armed = t.id == vocalsId;
     });
-    std::string recError;
     session.simulateInputsForTesting(2);
+    {   // Monitoring: input is audible through the track while the transport is stopped.
+        session.setMonitoring(true);
+        std::vector<float> in(256, 0.25f), silence(256), outL(256), outR(256);
+        const float* ins[2] = {in.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        session.processForTesting(ins, 2, outs, 2, 256);
+        expect(std::abs(outL[100]) > 0.05f && std::abs(session.positionSeconds()) < 1e-9,
+               "armed track monitors its input with the transport stopped");
+        session.setMonitoring(false);
+    }
+    session.setCountInBars(1);  // 1 bar of 4/4 at 120 BPM = 2 s of click before recording
+    std::string recError;
     expect(session.startRecording(recError), "recording starts on the armed track");
     if (!recError.empty()) std::cout << "       " << recError << std::endl;
     {
@@ -57,7 +68,7 @@ static int runSmokeTest(const juce::File& dir) {
         std::vector<float> in(block), silence(block), outL(block), outR(block);
         const float* ins[2] = {in.data(), silence.data()};
         float* outs[2] = {outL.data(), outR.data()};
-        for (int b = 0; b < 48000 / block; ++b) {
+        for (int b = 0; b < 3 * 48000 / block; ++b) {  // 2 s count-in + 1 s take
             for (int i = 0; i < block; ++i)
                 in[static_cast<size_t>(i)] = 0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f *
                                                              static_cast<float>(b * block + i) / 48000.0f);
@@ -73,9 +84,9 @@ static int runSmokeTest(const juce::File& dir) {
     for (auto& c : vox->audioClips)
         if (!rec.newClips.empty() && c.id == rec.newClips[0])
             if (auto* m = session.project().findMedia(c.mediaId))
-                takeOk = m->origin == "recording" && m->frames > 47000 &&
+                takeOk = m->origin == "recording" && m->frames > 47000 && m->frames < 49000 && c.startTick == 0 &&
                          dir.getChildFile(m->fileName).existsAsFile();
-    expect(takeOk, "take stored as content-addressed media in the package");
+    expect(takeOk, "count-in not recorded; take starts at the record point and is stored as media");
 
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());

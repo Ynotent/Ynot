@@ -48,6 +48,7 @@ private:
 
     juce::TextButton newButton_{"New Demo"}, openButton_{"Open"}, saveButton_{"Save"};
     juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
+    juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
     juce::TextButton audioButton_{"Audio"}, scanButton_{"Scan Plugins"};
     juce::Label status_;
     juce::ListBox tracks_;

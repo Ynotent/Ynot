@@ -5,7 +5,9 @@
 // callback never locks or allocates.
 #pragma once
 
+#include <algorithm>
 #include <atomic>
+#include <limits>
 #include <functional>
 #include <map>
 #include <memory>
@@ -60,6 +62,14 @@ public:
     void cycleInput(const std::string& trackId);
     std::string inputLabel(const std::string& trackId) const;
 
+    // Hear armed tracks' inputs through their effects and fader (device-local setting).
+    void setMonitoring(bool on);
+    bool monitoring() const { return monitoring_.load(); }
+    double monitoringLatencyMs() const;  // input + output + buffer, as the driver reports it
+    // Bars of click before recording starts (0 = off).
+    void setCountInBars(int bars) { countInBars_ = std::clamp(bars, 0, 4); }
+    int countInBars() const { return countInBars_; }
+
     void setMetronome(bool on);
     bool metronome() const { return metronomeOn_.load(); }
 
@@ -101,6 +111,9 @@ private:
     std::thread drainThread_;
     std::map<std::string, std::vector<int>> inputs_;
     std::atomic<bool> metronomeOn_{false};
+    std::atomic<bool> monitoring_{false};
+    int countInBars_ = 0;
+    int64_t forcedClickUntil_ = std::numeric_limits<int64_t>::min();
     int simulatedInputs_ = 0;
 };
 

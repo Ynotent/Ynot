@@ -13,6 +13,7 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -57,6 +58,8 @@ public:
         std::vector<RecordTarget> targets;
         std::string packageDir;
         double ringSeconds = 4.0;  // headroom if the drain thread stalls
+        // Input before this engine frame is ignored (count-in / pre-roll).
+        int64_t startAtFrame = std::numeric_limits<int64_t>::min();
     };
 
     Recorder();

@@ -179,6 +179,7 @@ struct Engine::TrackState {
     std::vector<std::unique_ptr<PluginProcessor>> inserts;
     struct PluginAuto { PluginProcessor* proc; std::string param; const AutomationLane* lane; };
     std::vector<PluginAuto> pluginAutomation;
+    std::vector<int> monitor;  // live input channels routed into this track
 };
 
 Engine::Engine() = default;
@@ -209,6 +210,10 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
         ts->track = *tp;
         const Track& t = ts->track;
         ts->id = t.id;
+        if (!isolate) {
+            auto mon = opts.monitorInputs.find(t.id);
+            if (mon != opts.monitorInputs.end()) ts->monitor = mon->second;
+        }
         ts->muted = !isolate && (t.mute || (anySolo && !t.solo));
         ts->gain = isolate ? 1.0 : dbToGain(t.gainDb);
         ts->pan = isolate ? 0.0 : t.pan;
@@ -314,7 +319,8 @@ void Engine::seek(int64_t frame) {
     }
 }
 
-void Engine::process(float* left, float* right, int frames) {
+void Engine::process(float* left, float* right, int frames, const float* const* inputs, int numInputs,
+                     bool transportRunning) {
     frames = std::min(frames, opts_.maxBlock);
     std::fill(left, left + frames, 0.f);
     std::fill(right, right + frames, 0.f);
@@ -331,6 +337,7 @@ void Engine::process(float* left, float* right, int frames) {
 
         // Audio sources (clips or frozen render), linear-interpolated resampling.
         for (auto& c : ts.clips) {
+            if (!transportRunning) break;
             if (c.endFrame <= blockStart || c.startFrame >= blockEnd) continue;
             const AudioBuffer& b = *c.buf;
             const int64_t n = b.frames();
@@ -351,12 +358,26 @@ void Engine::process(float* left, float* right, int frames) {
             }
         }
 
+        // Live input monitoring: the input runs through the track's inserts, fader and pan,
+        // so the performer hears what will be recorded (works with the transport stopped).
+        if (!ts.monitor.empty() && inputs) {
+            for (size_t k = 0; k < ts.monitor.size() && k < 2; ++k) {
+                const int in = ts.monitor[k];
+                if (in < 0 || in >= numInputs || !inputs[in]) continue;
+                const bool mono = ts.monitor.size() == 1;
+                for (int i = 0; i < frames; ++i) {
+                    if (mono || k == 0) l[i] += inputs[in][i];
+                    if (mono || k == 1) r[i] += inputs[in][i];
+                }
+            }
+        }
+
         // Block-rate plugin automation.
         for (auto& pa : ts.pluginAutomation) pa.proc->setParameter(pa.param, pa.lane->valueAt(blockTick, 0.0));
 
         if (ts.instrument) {
             ts.blockEvents.clear();
-            while (ts.eventCursor < ts.events.size() && ts.events[ts.eventCursor].frame < blockEnd) {
+            while (transportRunning && ts.eventCursor < ts.events.size() && ts.events[ts.eventCursor].frame < blockEnd) {
                 auto e = ts.events[ts.eventCursor++];
                 e.ev.frameOffset = static_cast<int>(std::max<int64_t>(0, e.frame - blockStart));
                 ts.blockEvents.push_back(e.ev);
@@ -381,8 +402,14 @@ void Engine::process(float* left, float* right, int frames) {
             right[i] += r[i] * gr;
         }
     }
-    if (metronome_.load(std::memory_order_relaxed)) renderClick(left, right, frames, blockStart);
-    pos_ = blockEnd;
+    if (transportRunning) {
+        const int64_t forcedUntil = clickUntil_.load(std::memory_order_relaxed);
+        if (metronome_.load(std::memory_order_relaxed))
+            renderClick(left, right, frames, blockStart);
+        else if (blockStart < forcedUntil)  // count-in: click even when the metronome is off
+            renderClick(left, right, static_cast<int>(std::min<int64_t>(frames, forcedUntil - blockStart)), blockStart);
+        pos_ = blockEnd;
+    }
 }
 
 void Engine::renderClick(float* left, float* right, int frames, int64_t blockStart) {
