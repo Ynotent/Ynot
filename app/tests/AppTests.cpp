@@ -3,6 +3,7 @@
 
 #include <iostream>
 
+#include "../src/AudioImporter.h"
 #include "../src/JuceAudioDevice.h"
 #include "../src/JucePluginHost.h"
 #include "ynot/ynot.hpp"
@@ -119,6 +120,21 @@ int main() {
         expect(!D::isLikelyVirtualDevice("MacBook Pro Speakers") && !D::isLikelyVirtualDevice("Scarlett 2i2 USB") &&
                    !D::isLikelyVirtualDevice("External Headphones"),
                "real speakers and interfaces are not flagged");
+    }
+
+    {   // Damaged files must be refused, never imported as noise.
+        juce::Random rng(1234);
+        for (const char* ext : {".mp3", ".wav", ".flac", ".m4a", ".wmv"}) {
+            auto f = juce::File::createTempFile(ext);
+            juce::MemoryBlock junk(40000);
+            for (size_t i = 0; i < junk.getSize(); ++i) junk[i] = static_cast<char>(rng.nextInt(256));
+            f.replaceWithData(junk.getData(), junk.getSize());
+            auto d = decodeAudioFile(f);
+            f.deleteFile();
+            std::cout << "  info random bytes as " << ext << ": "
+                      << (d.ok ? "DECODED " + juce::String(d.audio.frames()) + " frames" : juce::String("refused")) << "\n";
+            expect(!d.ok, (std::string("damaged ") + ext + " file is refused, not imported as noise").c_str());
+        }
     }
 
     std::cout << (failures ? "APP TESTS FAILED" : "app tests passed") << "\n";

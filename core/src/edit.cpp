@@ -185,6 +185,22 @@ int eraseNotesInRange(Track& track, int64_t fromTick, int64_t toTick) {
     return removed;
 }
 
+std::string importAudioClip(Project& p, const std::string& packageDir, const std::string& trackId,
+                            const AudioBuffer& audio, int64_t startTick) {
+    Track* t = p.findTrack(trackId);
+    if (!t || t->kind != TrackKind::Audio || audio.frames() <= 0 || audio.sampleRate <= 0) return {};
+    const std::string mediaId = addMedia(p, packageDir, audio, "import").id;
+    t = p.findTrack(trackId);
+    AudioClip c;
+    c.id = newId();
+    c.mediaId = mediaId;
+    c.startTick = std::max<int64_t>(0, startTick);
+    c.lengthTick = std::max<int64_t>(kMinClipTicks, frameToTick(p, audio.frames(), audio.sampleRate));
+    const std::string id = c.id;
+    placeClipReplacing(p, *t, std::move(c));
+    return id;
+}
+
 const std::vector<std::string>& trackPalette() {
     static const std::vector<std::string> v = {"#7C5CFF", "#2BD9A8", "#FFB547", "#FF6B9A",
                                                "#4DA3FF", "#B8E04A", "#FF8A4D", "#A98BFF"};

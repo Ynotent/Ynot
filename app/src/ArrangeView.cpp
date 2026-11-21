@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "AudioImporter.h"
 #include "QuantizeMenus.h"
 #include "ynot/edit.hpp"
 
@@ -239,7 +240,7 @@ private:
 
 // ============================================================== lanes
 
-class ArrangeView::Lanes : public juce::Component, private juce::Timer {
+class ArrangeView::Lanes : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer {
 public:
     explicit Lanes(ArrangeView& o) : owner_(o) {
         setWantsKeyboardFocus(false);  // keys go to ArrangeView
@@ -345,6 +346,12 @@ public:
                 g.drawRoundedRectangle(g2->toFloat().reduced(1.f), 4.f, 2.f);
             }
         }
+        if (dropHint_) {  // where a dropped file will start
+            const float dx = static_cast<float>(owner_.tickToX(
+                ynot::snapTick(owner_.xToTick(dropHint_->x), owner_.gridTicks())));
+            g.setColour(th.secondary);
+            g.drawLine(dx, 0.f, dx, static_cast<float>(getHeight()), 2.f);
+        }
         // Playhead.
         const float px = static_cast<float>(owner_.tickToX(owner_.session_.positionTick()));
         if (px >= owner_.laneX0()) {
@@ -428,6 +435,34 @@ public:
     }
 
     void mouseMagnify(const juce::MouseEvent& e, float scale) override { owner_.zoomAround(e.x, scale); }
+
+    // Drop audio files from Finder/Explorer: onto an audio track = that track at the drop
+    // point; anywhere else = a new track per file.
+    bool isInterestedInFileDrag(const juce::StringArray& files) override {
+        for (auto& f : files)
+            if (looksLikeImportableFile(juce::File(f))) return true;
+        return false;
+    }
+    void fileDragMove(const juce::StringArray&, int x, int y) override {
+        dropHint_ = {static_cast<float>(x), static_cast<float>(y)};
+        repaint();
+    }
+    void fileDragExit(const juce::StringArray&) override {
+        dropHint_.reset();
+        repaint();
+    }
+    void filesDropped(const juce::StringArray& paths, int x, int y) override {
+        dropHint_.reset();
+        repaint();
+        juce::Array<juce::File> files;
+        for (auto& p : paths)
+            if (looksLikeImportableFile(juce::File(p))) files.add(juce::File(p));
+        std::string trackId;
+        if (auto row = laneAt({static_cast<float>(x), static_cast<float>(y)}))
+            if (row->track->kind == ynot::TrackKind::Audio && files.size() == 1) trackId = row->track->id;
+        const int64_t tick = ynot::snapTick(owner_.xToTick(std::max(x, owner_.laneX0())), owner_.gridTicks());
+        if (owner_.onImportFiles) owner_.onImportFiles(files, trackId, tick);
+    }
 
     void mouseMove(const juce::MouseEvent& e) override {
         auto hit = clipAt(e.position);
@@ -665,6 +700,7 @@ private:
     Drag drag_;
     std::map<int, juce::Point<float>> touches_;
     juce::Point<float> longPressAt_;
+    std::optional<juce::Point<float>> dropHint_;
 };
 
 // ============================================================== ArrangeView
@@ -874,6 +910,10 @@ void ArrangeView::showTrackMenu(const std::string& trackId, juce::Component* tar
         for (const auto& pl : track.inserts)
             m.addSubMenu(juce::String(pl.name) + (pl.bypassed ? " (off)" : ""), pluginItems(pl, false));
     }
+    if (track.kind == ynot::TrackKind::Audio)
+        m.addItem("Import audio here (at the playhead)...", [this, tid = track.id] {
+            if (onImportRequest) onImportRequest(tid);
+        });
     juce::PopupMenu addFx;
     addFx.addItem("Gain (built-in)", [&session, tid = track.id] {
         session.edit([&](ynot::Project& p) { ynot::addInsert(p, tid, ynot::makeBuiltin(ynot::kBuiltinGain, "Gain")); });

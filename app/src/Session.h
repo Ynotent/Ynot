@@ -13,6 +13,7 @@
 #include <memory>
 #include <thread>
 
+#include "AudioImporter.h"
 #include "JuceAudioDevice.h"
 #include "JucePluginHost.h"
 #include "ynot/ynot.hpp"
@@ -75,6 +76,14 @@ public:
                                                                   : ynot::frameToTick(project_, recordEnd_, sampleRate_);
     }
 
+    // Import an audio file (any format this device can decode) as a clip. Decoding runs on a
+    // background thread; `done(error)` is called on the message thread (empty error = success).
+    // trackId empty or not an audio track => a new audio track named after the file.
+    void importAudioFile(const juce::File& file, const std::string& trackId, int64_t startTick,
+                         std::function<void(const juce::String& error)> done);
+    // Same, synchronously on the calling (message) thread. Returns an error, or empty.
+    juce::String importAudioFileNow(const juce::File& file, const std::string& trackId, int64_t startTick);
+
     // Quantize (device/user preference, not stored in the project).
     void setRecordQuantize(const std::string& presetId);  // "" = off
     const std::string& recordQuantizeId() const { return recordQuantizeId_; }
@@ -124,6 +133,8 @@ public:
 
 private:
     void rebuild();
+    juce::String commitImport(const juce::File& file, const DecodedAudio& decoded, const std::string& trackId,
+                              int64_t startTick);
     void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage&) override;
     void audioCallback(const float* const* ins, int numIns, float* const* outs, int numOuts, int frames);
 

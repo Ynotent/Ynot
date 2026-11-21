@@ -168,7 +168,28 @@ Done so far (built and tested on the Linux dev host only):
     Verified by saving and undoing via the keyboard straight after using menus.
   - Not yet verified with real third-party plugins or their windows (no plugins on CI).
 
+- **Audio import:**
+  - Three ways in: **+ Track → Import audio file…**, a track's **Import audio here…**, or
+    drag & drop from Finder/Explorer onto the arrangement (onto an audio track at the drop
+    point, or onto empty space for a new track).
+  - Decoded audio is stored as lossless project media at its original sample rate, so an
+    import made on one platform plays on all of them, e.g. a WMV imported on Windows plays
+    on a Mac.
+  - Formats by platform:
+    - everywhere: WAV, AIFF, FLAC, Ogg, MP3;
+    - macOS/iOS: + M4A/AAC/MP4/MOV/CAF (Core Audio);
+    - Windows: + WMA/WMV and MP4/AAC (Windows Media).
+  - Unsupported formats get a specific reason and a suggestion. Damaged files are refused,
+    never imported as noise: only OS media decoders may sniff files with unusual
+    extensions, so the MP3 decoder can't "decode" MP4/WMV containers into garbage.
+  - Test files (`app/tests/fixtures`, 0.5 s tones in 8 formats, MP4/WMV with video tracks)
+    are decoded by the smoke test on every CI platform.
+  - Verified on Linux: WAV, FLAC, Ogg, MP3 decode correctly; MP4/M4A/WMV/WMA give the right
+    reasons; random bytes in 5 formats are refused. MP4/M4A on macOS and WMA/WMV on Windows
+    are verified by CI.
+
 Still to do:
+- MP4/AAC on Android (MediaCodec); WMV on Apple platforms is not possible natively.
 - Built-in plugins have no window yet (their parameters aren't editable in the UI). Real-device plugin scan with the tester's AU/VST3 collection
   (checklist step 10).
 - Loop/cycle recording with take lanes; count-in length choice (currently 1 bar).

@@ -2,6 +2,8 @@
 
 #include <thread>
 
+#include "AudioImporter.h"
+
 namespace ynotapp {
 
 Session::Session(JucePluginHost& host) : host_(host) {
@@ -337,6 +339,41 @@ int Session::numMidiInputs() const {
 }
 
 // ---------------------------------------------------------------- quantize / time signature / punch
+
+void Session::importAudioFile(const juce::File& file, const std::string& trackId, int64_t startTick,
+                              std::function<void(const juce::String&)> done) {
+    if (!loaded_) {
+        if (done) done("Open or create a project first.");
+        return;
+    }
+    juce::Thread::launch([this, file, trackId, startTick, done] {
+        auto decoded = std::make_shared<DecodedAudio>(decodeAudioFile(file));
+        juce::MessageManager::callAsync([this, file, trackId, startTick, done, decoded] {
+            const auto err = decoded->ok ? commitImport(file, *decoded, trackId, startTick) : decoded->error;
+            if (done) done(err);
+        });
+    });
+}
+
+juce::String Session::importAudioFileNow(const juce::File& file, const std::string& trackId, int64_t startTick) {
+    if (!loaded_) return "Open or create a project first.";
+    const auto decoded = decodeAudioFile(file);
+    return decoded.ok ? commitImport(file, decoded, trackId, startTick) : decoded.error;
+}
+
+juce::String Session::commitImport(const juce::File& file, const DecodedAudio& decoded, const std::string& trackId,
+                                   int64_t startTick) {
+    bool ok = false;
+    edit([&](ynot::Project& p) {
+        std::string target = trackId;
+        const auto* t = p.findTrack(target);
+        if (!t || t->kind != ynot::TrackKind::Audio)
+            target = ynot::addTrack(p, ynot::TrackKind::Audio, file.getFileNameWithoutExtension().toStdString());
+        ok = !ynot::importAudioClip(p, dir_.getFullPathName().toStdString(), target, decoded.audio, startTick).empty();
+    });
+    save();  // the media file is already in the package; keep project.json in step
+    return ok ? juce::String() : juce::String("Couldn't add the audio to the project.");
+}
 
 void Session::setRecordQuantize(const std::string& presetId) {
     recordQuantizeId_ = ynot::findQuantizePreset(presetId) ? presetId : std::string();

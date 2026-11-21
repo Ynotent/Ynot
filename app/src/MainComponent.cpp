@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 
+#include "AudioImporter.h"
 #include "QuantizeMenus.h"
 
 namespace ynotapp {
@@ -118,6 +119,11 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     compat_.setReadOnly(true);
     compat_.setScrollbarsShown(true);
 
+    // Drag & drop and the track menu route imports through the same path as the file chooser.
+    arrange_.onImportFiles = [this](const juce::Array<juce::File>& files, const std::string& trackId, int64_t tick) {
+        importFiles(files, trackId, tick);
+    };
+    arrange_.onImportRequest = [this](const std::string& trackId) { importAudio(trackId); };
     session_.onChange = [this] { refresh(); };
     setSize(1280, 800);
     refresh();
@@ -402,7 +408,35 @@ void MainComponent::showMoreMenu() {
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(moreButton_));
 }
 
+void MainComponent::importAudio(const std::string& trackId) {
+    chooser_ = std::make_unique<juce::FileChooser>(
+        "Import audio (WAV, MP3, M4A/MP4, FLAC, Ogg, AIFF, WMA/WMV on Windows)",
+        juce::File::getSpecialLocation(juce::File::userMusicDirectory), importFilePatterns());
+    const int chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles |
+                             juce::FileBrowserComponent::canSelectMultipleItems;
+    chooser_->launchAsync(chooserFlags, [this, trackId](const juce::FileChooser& fc) {
+        const auto files = fc.getResults();
+        for (const auto& f : files) importFiles({f}, trackId, session_.positionTick());
+    });
+}
+
+void MainComponent::importFiles(const juce::Array<juce::File>& files, const std::string& trackId, int64_t startTick) {
+    juce::Component::SafePointer<MainComponent> safe(this);
+    for (const auto& f : files) {
+        status_.setText("Importing " + f.getFileName() + "...", juce::dontSendNotification);
+        session_.importAudioFile(f, trackId, startTick, [safe, name = f.getFileName()](const juce::String& error) {
+            if (!safe) return;
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                       "Couldn't import " + name, error);
+        });
+    }
+}
+
 void MainComponent::addTrackItems(juce::PopupMenu& m) {
+    m.addItem("Import audio file... (WAV, MP3, M4A/MP4, FLAC, WMA/WMV...)", session_.hasProject(), false,
+              [this] { importAudio({}); });
+    m.addSeparator();
     m.addItem("Audio track (record a mic or instrument)", session_.hasProject(), false, [this] {
         session_.edit([](ynot::Project& p) { ynot::addTrack(p, ynot::TrackKind::Audio); });
     });

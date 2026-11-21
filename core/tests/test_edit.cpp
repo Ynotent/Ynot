@@ -229,3 +229,36 @@ TEST("plugins: add, reorder, bypass and remove effects; swap instruments") {
     CHECK(removePlugin(p, "k", p.findTrack("k")->instrument->id));
     CHECK(!p.findTrack("k")->instrument);
 }
+
+TEST("import: decoded audio becomes a clip that plays at its own sample rate") {
+    Project p = editProject();
+    auto dir = th::tempDir("import");
+    AudioBuffer a;  // 0.5 s stereo at 44.1 kHz (like a typical MP3)
+    a.sampleRate = 44100;
+    a.channels = 2;
+    for (int i = 0; i < 22050; ++i) {
+        const float v = static_cast<float>(0.4 * std::sin(2 * 3.14159265358979 * 440.0 * i / 44100.0));
+        a.samples.push_back(v);
+        a.samples.push_back(v);
+    }
+    const std::string clip = importAudioClip(p, dir, "b", a, 2 * kBeat);
+    CHECK(!clip.empty());
+    auto& c = p.findTrack("b")->audioClips.at(0);
+    CHECK_EQ(c.startTick, 2 * kBeat);
+    CHECK_EQ(c.lengthTick, kBeat);  // 0.5 s at 120 BPM
+    const MediaRef* m = p.findMedia(c.mediaId);
+    CHECK(m && m->origin == "import" && m->sampleRate == 44100.0);
+    CHECK(importAudioClip(p, dir, "k", a, 0).empty());  // not an audio track
+    CHECK(importAudioClip(p, dir, "b", AudioBuffer{}, 0).empty());
+
+    for (auto& t : p.tracks) t.mute = t.id != "b";
+    PackageMediaProvider media(dir);
+    BuiltinPluginHost host;
+    AudioBuffer out = renderProject(p, media, host, 48000, 0.0);
+    CHECK(th::rms(out, 0, 47000) < 1e-6);         // silent before the clip
+    CHECK(th::rms(out, 49000, 70000) > 0.2);      // the imported tone
+    // And it survives a save/load round trip with its media.
+    saveProjectPackage(p, dir);
+    Project q = loadProjectPackage(dir);
+    CHECK(loadMedia(*q.findMedia(c.mediaId), dir).frames() == 22050);
+}

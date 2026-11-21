@@ -61,6 +61,8 @@ private:
     void addQuantizeItems(juce::PopupMenu& m);
     void addPluginItems(juce::PopupMenu& m);
     void addTrackItems(juce::PopupMenu& m);
+    void importAudio(const std::string& trackId);  // file chooser
+    void importFiles(const juce::Array<juce::File>& files, const std::string& trackId, int64_t startTick);
     void addPunchItems(juce::PopupMenu& m);
     void addTimeSignatureItems(juce::PopupMenu& m);
     ynot::Platform selectedTarget() const;

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ynot/json.hpp"
+#include "ynot/media.hpp"
 #include "ynot/model.hpp"
 
 namespace ynot {
@@ -56,6 +57,13 @@ bool removePlugin(Project& p, const std::string& trackId, const std::string& plu
 bool setPluginBypassed(Project& p, const std::string& trackId, const std::string& pluginId, bool bypassed);
 // Moves an insert within the chain.
 bool moveInsert(Project& p, const std::string& trackId, const std::string& pluginId, int newIndex);
+// Imports decoded audio (from any file format the platform can read) as a clip on an
+// audio track at `startTick`. The audio is stored in the project as content-addressed
+// media, so it plays on every platform afterwards — e.g. a WMV imported on Windows
+// opens on a Mac. Returns the new clip id, or empty if the track isn't an audio track.
+std::string importAudioClip(Project& p, const std::string& packageDir, const std::string& trackId,
+                            const AudioBuffer& audio, int64_t startTick);
+
 // The colours new tracks cycle through (matches design/tokens.json trackPalette).
 const std::vector<std::string>& trackPalette();
 

@@ -13,7 +13,8 @@ set(YNOT_APP_SOURCES
     src/Session.cpp
     src/MainComponent.cpp
     src/ArrangeView.cpp
-    src/PluginSandbox.cpp)
+    src/PluginSandbox.cpp
+    src/AudioImporter.cpp)
 
 juce_add_gui_app(YnotApp
     PRODUCT_NAME "Ynot"
@@ -38,7 +39,11 @@ set(YNOT_JUCE_DEFS
     $<IF:$<STREQUAL:${CMAKE_SYSTEM_NAME},iOS>,JUCE_PLUGINHOST_VST3=0,JUCE_PLUGINHOST_VST3=1>
     JUCE_PLUGINHOST_AU=1
     JUCE_USE_ANDROID_OBOE=1
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    # Audio import: MP3 everywhere; Windows Media (WMA/WMV, plus MP4/AAC) on Windows.
+    # Core Audio (M4A/AAC/MP4) is on by default on Apple platforms.
+    JUCE_USE_MP3AUDIOFORMAT=1
+    JUCE_USE_WINDOWS_MEDIA_FORMAT=1)
 
 if(YNOT_ASIO_SDK_DIR)
     list(APPEND YNOT_JUCE_DEFS JUCE_ASIO=1)
@@ -59,7 +64,7 @@ target_link_libraries(YnotApp PRIVATE
 
 if(YNOT_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     juce_add_console_app(YnotAppTests PRODUCT_NAME "YnotAppTests")
-    target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp src/JuceAudioDevice.cpp src/PluginSandbox.cpp)
+    target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp src/JuceAudioDevice.cpp src/PluginSandbox.cpp src/AudioImporter.cpp)
     target_compile_definitions(YnotAppTests PRIVATE ${YNOT_JUCE_DEFS})
     # Same JUCE modules as the app: plugin hosting on macOS needs frameworks (e.g. CoreAudioKit
     # for AU generic views) that only the full module set pulls in.

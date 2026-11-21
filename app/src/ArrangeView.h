@@ -39,6 +39,10 @@ public:
     // Track menu: instrument, effects (add/open/bypass/reorder/remove), freeze, rename, delete.
     void showTrackMenu(const std::string& trackId, juce::Component* target);
     void renameTrackDialog(const std::string& trackId, const std::string& current);
+
+    // Audio import hooks (set by the main window).
+    std::function<void(const juce::Array<juce::File>&, const std::string& trackId, int64_t startTick)> onImportFiles;
+    std::function<void(const std::string& trackId)> onImportRequest;
     bool hasSelection() const { return !selected_.clipId.empty(); }
     // While the on-screen keyboard is open, letter keys play notes instead of editing.
     void setMusicalTyping(bool on) { musicalTyping_ = on; }

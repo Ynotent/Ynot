@@ -11,6 +11,7 @@
 #include <iostream>
 
 #include "MainComponent.h"
+#include "AudioImporter.h"
 #include "PluginSandbox.h"
 
 namespace ynotapp {
@@ -270,6 +271,49 @@ static int runSmokeTest(const juce::File& dir) {
                "a too-slow plugin is skipped per block without stalling audio");
         std::cout << "  info sandbox: slow plugin skipped " << slow.lateBlocks() << "/20 blocks, "
                   << juce::String(perBlockMs, 2) << " ms per call" << std::endl;
+    }
+
+    {   // Audio import: every fixture this platform can decode, and a clear reason for the rest.
+        auto fixtures = juce::File::getCurrentWorkingDirectory().getChildFile("app/tests/fixtures");
+        if (auto* env = std::getenv("YNOT_FIXTURES")) fixtures = juce::File(env);
+        if (!fixtures.isDirectory()) {
+            std::cout << "  info audio import fixtures not found (run from the repo root); skipped" << std::endl;
+        } else {
+#if JUCE_MAC || JUCE_IOS
+            const juce::StringArray mustWork{"wav", "flac", "ogg", "mp3", "m4a", "mp4"}, mustFail{"wmv", "wma"};
+#elif JUCE_WINDOWS
+            const juce::StringArray mustWork{"wav", "flac", "ogg", "mp3", "wma", "wmv"}, mustFail{};
+#else
+            const juce::StringArray mustWork{"wav", "flac", "ogg", "mp3"}, mustFail{"mp4", "m4a", "wmv", "wma"};
+#endif
+            bool allOk = true, reasonsOk = true;
+            for (auto& ext : mustWork) {
+                auto d = decodeAudioFile(fixtures.getChildFile("tone." + ext));
+                // 0.5 s of a 440 Hz tone at 44.1 kHz (lossy codecs may pad a little).
+                const bool good = d.ok && std::abs(d.audio.sampleRate - 44100.0) < 1.0 && d.audio.frames() >= 21000 &&
+                                  d.audio.frames() <= 26000;
+                std::cout << "  info import ." << ext << ": " << (good ? "ok via " + d.formatName : "FAILED " + d.error)
+                          << std::endl;
+                allOk &= good;
+            }
+            for (auto& ext : mustFail) {
+                auto d = decodeAudioFile(fixtures.getChildFile("tone." + ext));
+                std::cout << "  info import ." << ext << " (not supported here): "
+                          << (d.ok ? juce::String("unexpectedly decoded") : d.error.upToFirstOccurrenceOf(".", true, false))
+                          << std::endl;
+                reasonsOk &= d.ok || d.error.isNotEmpty();
+            }
+            expect(allOk, "audio files this platform supports are decoded correctly");
+            expect(reasonsOk, "unsupported formats give a clear reason");
+
+            // Import through the session (background decode -> new track -> clip), like the UI does.
+            const size_t tracksBefore = session.project().tracks.size();
+            const auto err = session.importAudioFileNow(fixtures.getChildFile("tone.mp3"), {}, 0);
+            const auto& tracks = session.project().tracks;
+            expect(err.isEmpty() && tracks.size() == tracksBefore + 1 && tracks.back().name == "tone" &&
+                       tracks.back().audioClips.size() == 1,
+                   "importing an MP3 creates a track named after the file with the audio on it");
+        }
     }
 
     session.save();
