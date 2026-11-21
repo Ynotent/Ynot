@@ -70,6 +70,7 @@ jobs:
 
   # ---------------------------------------------------------------- JUCE app (M1)
   app-linux:
+    timeout-minutes: 45
     name: App (Linux dev host, JUCE) + smoke test
     runs-on: ubuntu-24.04
     steps:
@@ -82,17 +83,21 @@ jobs:
           xvfb-run -a build/app/YnotApp_artefacts/Release/Ynot --smoke-test "$RUNNER_TEMP/smoke.ynot"
 
   app-macos:
+    timeout-minutes: 45
     name: App (macOS, CoreAudio + AU/VST3 hosting)
     runs-on: macos-15  # macos-14 was retired by GitHub on 2026-11-02
     steps:
       - uses: actions/checkout@v4
       - run: |
-          cmake -S . -B build -DYNOT_BUILD_APP=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          # Apple Silicon only here: a universal app build takes ~37 min per push. The core job
+          # still builds and tests universal (arm64 + x86_64); Intel app builds are a release step.
+          cmake -S . -B build -DYNOT_BUILD_APP=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
           cmake --build build -j
           ctest --test-dir build --output-on-failure
           build/app/YnotApp_artefacts/Release/Ynot.app/Contents/MacOS/Ynot --smoke-test "$RUNNER_TEMP/smoke.ynot"
 
   app-windows:
+    timeout-minutes: 45
     name: App (Windows, WASAPI + VST3 hosting)
     runs-on: windows-2022
     steps:
@@ -105,6 +110,7 @@ jobs:
           build/app/YnotApp_artefacts/Release/Ynot.exe --smoke-test "$RUNNER_TEMP/smoke.ynot"
 
   app-ios:
+    timeout-minutes: 45
     name: App (iOS simulator build, unsigned)
     runs-on: macos-15  # macos-14 was retired by GitHub on 2026-11-02
     steps:

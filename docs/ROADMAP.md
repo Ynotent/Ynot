@@ -12,8 +12,8 @@ Based on CI run #1 (commit `0fea6cc`, 2026-11-21) on GitHub-hosted runners:
 |---|---|---|
 | Windows | **native-shell-builds** | MSVC x64 (CI run #1): core builds and 52/52 tests pass; the JUCE app (WASAPI + VST3 hosting) builds, its 9 adapter tests pass, and the headless smoke test passes (including recording through the audio callback). |
 | Android | **core-compiles** | Core cross-compiles with the NDK for arm64-v8a and x86_64. No Android app shell yet (M5). |
-| macOS | **Planned** (M1 in progress) | CI jobs defined but **never ran**: GitHub cancelled them before a macOS runner was assigned (see below). |
-| iOS / iPadOS | **Planned** | Same as macOS: the iOS jobs need a macOS runner and never started. |
+| macOS | **core-compiles** (M1 in progress) | CI runs #4/#6 (`macos-15`, Xcode 16.4): core builds universal (arm64 + x86_64) and 57/57 tests pass. The app bundle also links, but the app test executable failed to link (missing CoreAudioKit), so the app's tests and smoke test haven't run on macOS CI yet; fixed in the next commit. First hands-on testing on an M2 MacBook Pro is in progress (`docs/TESTING_MACOS.md`). |
+| iOS / iPadOS | **native-shell-builds** (unsigned, simulator only) | CI run #6: core cross-compiles for arm64 devices, and the full JUCE app builds for the iOS simulator (Xcode 16.4, unsigned). It has never been signed, installed or run on an iPhone/iPad. |
 | Linux (dev host only) | n/a | Core with ASan/UBSan and Clang `-Werror`, app build and smoke test pass in CI and locally. |
 
 **macOS runners:** all four macOS-based jobs in run #1 were cancelled before any step ran. The

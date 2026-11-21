@@ -60,7 +60,12 @@ if(YNOT_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     juce_add_console_app(YnotAppTests PRODUCT_NAME "YnotAppTests")
     target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp)
     target_compile_definitions(YnotAppTests PRIVATE ${YNOT_JUCE_DEFS})
+    # Same JUCE modules as the app: plugin hosting on macOS needs frameworks (e.g. CoreAudioKit
+    # for AU generic views) that only the full module set pulls in.
     target_link_libraries(YnotAppTests PRIVATE
-        ynot_core juce::juce_audio_processors juce::juce_gui_basics juce::juce_recommended_config_flags)
+        ynot_core ${YNOT_JUCE_MODULES} juce::juce_recommended_config_flags)
+    if(APPLE)
+        target_link_libraries(YnotAppTests PRIVATE "-framework CoreAudioKit")
+    endif()
     add_test(NAME ynot_app_tests COMMAND YnotAppTests)
 endif()
