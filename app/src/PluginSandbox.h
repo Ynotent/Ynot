@@ -26,7 +26,7 @@ namespace ynotapp {
 namespace sandbox {
 
 constexpr uint32_t kMagic = 0x594E5342;  // "YNSB"
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;
 constexpr int kMaxBlock = 2048;
 constexpr int kMaxMidi = 512;
 constexpr int kMaxParams = 64;
@@ -48,6 +48,7 @@ struct Shared {
     std::atomic<uint64_t> heartbeat;   // host: increments while alive (helper exits if it stops)
     std::atomic<uint32_t> stateRequest, stateDone;  // host asks for the plugin's state
     std::atomic<uint32_t> resetRequest;              // host asks for reset (seek/rewind)
+    std::atomic<uint32_t> editorRequest;             // host asks to show the plugin's window
     std::atomic<uint64_t> paramWrite, paramRead;
     ParamChange params[kMaxParams];
     int32_t isInstrument;
@@ -90,6 +91,9 @@ public:
 
     // Message thread.
     bool getState(juce::MemoryBlock& out, int timeoutMs = 2000);
+    // Shows the plugin's own window, opened by the helper process (so a crash in the
+    // plugin's UI can't take Ynot down either).
+    void showEditor();
     bool pollCrashed();  // true once, when the helper has died unexpectedly
     bool isDead() const { return dead_.load(); }
     const juce::String& displayName() const { return spec_.displayName; }

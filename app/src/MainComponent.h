@@ -26,6 +26,16 @@ public:
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
     bool keyStateChanged(bool isKeyDown) override;
+    // Take keyboard focus as soon as the window is on screen, so shortcuts (Space, Return,
+    // Cmd+S, Cmd+Z...) work without clicking into the arrangement first.
+    void parentHierarchyChanged() override { focusSoon(); }
+    void visibilityChanged() override { focusSoon(); }
+    void focusSoon() {
+        juce::Component::SafePointer<MainComponent> safe(this);
+        juce::MessageManager::callAsync([safe] {
+            if (safe && safe->isShowing() && !safe->hasKeyboardFocus(true)) safe->grabKeyboardFocus();
+        });
+    }
     void showKeyboard(bool show) {
         keysButton_.setToggleState(show, juce::dontSendNotification);
         keyboard_.setVisible(show);
@@ -50,6 +60,7 @@ private:
     void showCompatibilityDialog();
     void addQuantizeItems(juce::PopupMenu& m);
     void addPluginItems(juce::PopupMenu& m);
+    void addTrackItems(juce::PopupMenu& m);
     void addPunchItems(juce::PopupMenu& m);
     void addTimeSignatureItems(juce::PopupMenu& m);
     ynot::Platform selectedTarget() const;
@@ -65,6 +76,7 @@ private:
     juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
     juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
     juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"};
+    juce::TextButton addTrackButton_{"+ Track"};
     juce::TextButton undoButton_{"Undo"}, redoButton_{"Redo"}, keysButton_{"Keys"};
     // File/device actions: toolbar on larger screens, "More" menu on phones.
     juce::TextButton newButton_{"New Demo"}, openButton_{"Open"}, saveButton_{"Save"};

@@ -152,8 +152,24 @@ Done so far (built and tested on the Linux dev host only):
   - **Not yet verified with real third-party AU/VST3 plugins:** no CI machine has any
     installed. That's for the tester's Mac (checklist step 10 onwards).
 
+- **Tracks and plugins:**
+  - **+ Track** adds audio or instrument tracks; new instrument tracks start with Ynot Synth.
+  - Click a track's name (▾) for its menu: choose or change the instrument (built-in or any
+    installed AU/VST3, grouped by maker), add effects (built-in Gain/Lowpass or installed), and
+    per plugin: open its window, bypass, move up/down, remove. Also Freeze, Rename, Delete track.
+  - The header shows the plugin chain ("Ynot Synth > ProVerb (off) > Gain").
+  - Plugin windows open in Ynot for in-process plugins, and in the helper process for sandboxed
+    ones (a crash in a plugin's UI can't take Ynot down). Plugins without their own UI get
+    generic controls.
+  - The core operations (`edit.hpp`: addTrack, removeTrack, renameTrack, addInsert,
+    setInstrument, removePlugin, setPluginBypassed, moveInsert) are undoable and unit-tested.
+  - Found while testing: keyboard shortcuts (Space, Return, Cmd+S, Cmd+Z) were ignored until
+    you clicked inside the arrangement. The window now forwards them, so they always work.
+    Verified by saving and undoing via the keyboard straight after using menus.
+  - Not yet verified with real third-party plugins or their windows (no plugins on CI).
+
 Still to do:
-- Plugin editor windows. For sandboxed plugins they will open in the helper's own window. Real-device plugin scan with the tester's AU/VST3 collection
+- Built-in plugins have no window yet (their parameters aren't editable in the UI). Real-device plugin scan with the tester's AU/VST3 collection
   (checklist step 10).
 - Loop/cycle recording with take lanes; count-in length choice (currently 1 bar).
 - MIDI recording from controllers onto instrument tracks.

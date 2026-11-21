@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 
+#include "ynot/engine.hpp"
 #include "ynot/project_format.hpp"
 #include "ynot/recorder.hpp"
 
@@ -182,6 +183,113 @@ int eraseNotesInRange(Track& track, int64_t fromTick, int64_t toTick) {
         removed += static_cast<int>(before - notes.size());
     }
     return removed;
+}
+
+const std::vector<std::string>& trackPalette() {
+    static const std::vector<std::string> v = {"#7C5CFF", "#2BD9A8", "#FFB547", "#FF6B9A",
+                                               "#4DA3FF", "#B8E04A", "#FF8A4D", "#A98BFF"};
+    return v;
+}
+
+std::string addTrack(Project& p, TrackKind kind, const std::string& name) {
+    Track t;
+    t.id = newId();
+    t.kind = kind;
+    int count = 0;
+    double maxOrder = 0;
+    for (auto& existing : p.tracks) {
+        maxOrder = std::max(maxOrder, existing.order);
+        count += existing.kind == kind;
+    }
+    t.order = maxOrder + 1;
+    t.name = !name.empty() ? name : (kind == TrackKind::Audio ? "Audio " : "Instrument ") + std::to_string(count + 1);
+    t.color = trackPalette()[p.tracks.size() % trackPalette().size()];
+    if (kind == TrackKind::Instrument) {
+        PluginInstance synth;
+        synth.id = newId();
+        synth.name = "Ynot Synth";
+        synth.vendor = "Ynot";
+        synth.format = PluginFormat::Builtin;
+        synth.uid = kBuiltinSynth;
+        synth.version = "1";
+        t.instrument = synth;
+    }
+    p.tracks.push_back(t);
+    return t.id;
+}
+
+bool removeTrack(Project& p, const std::string& trackId) {
+    auto it = std::find_if(p.tracks.begin(), p.tracks.end(), [&](const Track& t) { return t.id == trackId; });
+    if (it == p.tracks.end()) return false;
+    p.tracks.erase(it);
+    return true;
+}
+
+bool renameTrack(Project& p, const std::string& trackId, const std::string& name) {
+    Track* t = p.findTrack(trackId);
+    if (!t || name.empty()) return false;
+    t->name = name;
+    return true;
+}
+
+std::string addInsert(Project& p, const std::string& trackId, PluginInstance plugin, int index) {
+    Track* t = p.findTrack(trackId);
+    if (!t) return {};
+    if (plugin.id.empty()) plugin.id = newId();
+    const auto pos = (index < 0 || index > static_cast<int>(t->inserts.size())) ? t->inserts.end()
+                                                                                 : t->inserts.begin() + index;
+    std::string id = plugin.id;
+    t->inserts.insert(pos, std::move(plugin));
+    return id;
+}
+
+bool setInstrument(Project& p, const std::string& trackId, PluginInstance plugin) {
+    Track* t = p.findTrack(trackId);
+    if (!t || t->kind != TrackKind::Instrument) return false;
+    if (plugin.id.empty()) plugin.id = newId();
+    t->instrument = std::move(plugin);
+    t->frozen = false;  // the sound changed: an old freeze no longer applies
+    return true;
+}
+
+bool removePlugin(Project& p, const std::string& trackId, const std::string& pluginId) {
+    Track* t = p.findTrack(trackId);
+    if (!t) return false;
+    if (t->instrument && t->instrument->id == pluginId) {
+        t->instrument.reset();
+        return true;
+    }
+    auto it = std::find_if(t->inserts.begin(), t->inserts.end(), [&](const PluginInstance& x) { return x.id == pluginId; });
+    if (it == t->inserts.end()) return false;
+    t->inserts.erase(it);
+    return true;
+}
+
+bool setPluginBypassed(Project& p, const std::string& trackId, const std::string& pluginId, bool bypassed) {
+    Track* t = p.findTrack(trackId);
+    if (!t) return false;
+    if (t->instrument && t->instrument->id == pluginId) {
+        t->instrument->bypassed = bypassed;
+        return true;
+    }
+    for (auto& x : t->inserts)
+        if (x.id == pluginId) {
+            x.bypassed = bypassed;
+            return true;
+        }
+    return false;
+}
+
+bool moveInsert(Project& p, const std::string& trackId, const std::string& pluginId, int newIndex) {
+    Track* t = p.findTrack(trackId);
+    if (!t) return false;
+    auto it = std::find_if(t->inserts.begin(), t->inserts.end(), [&](const PluginInstance& x) { return x.id == pluginId; });
+    if (it == t->inserts.end()) return false;
+    PluginInstance moved = *it;
+    t->inserts.erase(it);
+    newIndex = std::clamp(newIndex, 0, static_cast<int>(t->inserts.size()));
+    t->inserts.insert(t->inserts.begin() + newIndex, moved);
+    return true;
 }
 
 void History::record(const Project& before) {

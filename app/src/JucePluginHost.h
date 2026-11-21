@@ -8,6 +8,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <map>
 #include <functional>
@@ -93,6 +94,13 @@ public:
     void setSandboxExecutable(const juce::File& exe) { sandboxExecutable_ = exe; }
     void setSandboxEnabled(bool on) { sandboxEnabled_ = on; }
     bool sandboxEnabled() const { return sandboxEnabled_; }
+    // Plugins this device can load, for the browser (instruments or effects), sorted by
+    // manufacturer then name.
+    std::vector<juce::PluginDescription> availablePlugins(bool instruments) const;
+    // Opens the plugin's own window (generic controls if it has none). Returns false for
+    // builtins or plugins that aren't loaded.
+    bool openEditor(const std::string& pluginInstanceId);
+
     // Message thread: plugins that crashed (or failed to load in a sandbox) since last call.
     std::vector<juce::String> takeCrashReports();
 
@@ -109,7 +117,9 @@ private:
         std::weak_ptr<ynot::PluginProcessor> processor;
         SandboxedProcessor* sandbox = nullptr;  // valid while processor is alive
         std::function<bool(juce::MemoryBlock&)> getState;
+        std::weak_ptr<JuceProcessorAdapter> adapter;  // in-process plugins only
     };
+    std::vector<std::unique_ptr<juce::DocumentWindow>> editorWindows_;
     mutable std::mutex liveMutex_;
     std::map<std::string, LiveEntry> live_;
     std::vector<std::weak_ptr<SandboxedProcessor>> sandboxes_;

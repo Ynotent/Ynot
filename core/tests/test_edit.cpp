@@ -159,3 +159,73 @@ TEST("edit: delete and undo/redo through snapshots") {
     CHECK(!h.canRedo());
     CHECK(!deleteClip(p, "a", "nope"));
 }
+
+TEST("tracks: add, rename, remove; instrument tracks start with a working synth") {
+    Project p = editProject();
+    const auto before = p.tracks.size();
+    std::string inst = addTrack(p, TrackKind::Instrument);
+    std::string aud = addTrack(p, TrackKind::Audio, "Guitar");
+    CHECK_EQ(p.tracks.size(), before + 2);
+    CHECK(inst != aud && !inst.empty());
+    CHECK_EQ(p.findTrack(aud)->name, std::string("Guitar"));
+    CHECK_EQ(p.findTrack(inst)->name, std::string("Instrument 2"));  // one instrument track existed
+    CHECK(p.findTrack(inst)->instrument && p.findTrack(inst)->instrument->uid == kBuiltinSynth);
+    CHECK(!p.findTrack(aud)->instrument);
+    CHECK(p.orderedTracks().back()->id == aud);  // appended at the end
+    CHECK(p.findTrack(inst)->color != p.findTrack(aud)->color);
+
+    // The new instrument track plays notes straight away.
+    p.findTrack(inst)->midiClips = {{"m", 0, kBeat, {{0, kBeat / 2, 60, 100}}}};
+    for (auto& t : p.tracks) t.mute = t.id != inst;
+    PackageMediaProvider media(th::tempDir("addtrack"));
+    BuiltinPluginHost host;
+    CHECK(th::rms(renderProject(p, media, host, 48000, 0.0)) > 0.01);
+
+    CHECK(renameTrack(p, inst, "Bass"));
+    CHECK(!renameTrack(p, inst, ""));
+    CHECK(removeTrack(p, inst));
+    CHECK(p.findTrack(inst) == nullptr);
+    CHECK(!removeTrack(p, inst));
+}
+
+TEST("plugins: add, reorder, bypass and remove effects; swap instruments") {
+    Project p = editProject();
+    auto gain = makeBuiltin(kBuiltinGain, "Gain");
+    gain.params["gainDb"] = -60.0;  // nearly silent: easy to hear whether it's active
+    auto lp = makeBuiltin(kBuiltinFilter, "Lowpass");
+    const std::string g = addInsert(p, "a", gain);
+    const std::string f = addInsert(p, "a", lp, 0);  // at the front
+    CHECK_EQ(p.findTrack("a")->inserts.size(), size_t(2));
+    CHECK_EQ(p.findTrack("a")->inserts[0].id, f);
+    CHECK(moveInsert(p, "a", f, 5));                 // clamps to the end
+    CHECK_EQ(p.findTrack("a")->inserts[1].id, f);
+
+    auto dir = th::tempDir("plugins");
+    AudioBuffer take;
+    take.sampleRate = 48000;
+    take.channels = 1;
+    take.samples.assign(48000, 0.5f);
+    std::string mid = addMedia(p, dir, take, "recording").id;
+    p.findTrack("a")->audioClips = {{"c1", mid, 0, 2 * kBeat, 0, 0.0}};
+    p.findTrack("k")->mute = true;
+    PackageMediaProvider media(dir);
+    BuiltinPluginHost host;
+    const double quiet = th::rms(renderProject(p, media, host, 48000, 0.0), 1000, 20000);
+    CHECK(setPluginBypassed(p, "a", g, true));
+    const double loud = th::rms(renderProject(p, media, host, 48000, 0.0), 1000, 20000);
+    CHECK(loud > quiet * 100);
+    CHECK(setPluginBypassed(p, "a", g, false));
+    CHECK(removePlugin(p, "a", g));
+    CHECK_EQ(p.findTrack("a")->inserts.size(), size_t(1));
+    CHECK(!removePlugin(p, "a", g));
+
+    // Instruments: only on instrument tracks; swapping unfreezes; removing silences.
+    auto other = makeBuiltin(kBuiltinSynth, "Synth 2");
+    CHECK(!setInstrument(p, "a", other));
+    p.findTrack("k")->frozen = true;
+    CHECK(setInstrument(p, "k", other));
+    CHECK(!p.findTrack("k")->frozen);
+    CHECK_EQ(p.findTrack("k")->instrument->name, std::string("Synth 2"));
+    CHECK(removePlugin(p, "k", p.findTrack("k")->instrument->id));
+    CHECK(!p.findTrack("k")->instrument);
+}

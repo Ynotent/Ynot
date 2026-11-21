@@ -299,10 +299,14 @@ private:
     std::vector<float> in_, outL_, outR_;
 };
 
-class MainWindow : public juce::DocumentWindow {
+class MainWindow : public juce::DocumentWindow, private juce::KeyListener {
 public:
     MainWindow(const juce::String& name, Session& session, JucePluginHost& host)
         : DocumentWindow(name, juce::Colours::black, DocumentWindow::allButtons) {
+        // Shortcuts must work even when nothing inside the window has keyboard focus
+        // (e.g. right after a popup menu closes): unhandled keys reach the window, which
+        // forwards them to the main component.
+        addKeyListener(this);
         setUsingNativeTitleBar(true);
         setContentOwned(new MainComponent(session, host), true);
 #if JUCE_IOS || JUCE_ANDROID
@@ -313,8 +317,26 @@ public:
         centreWithSize(getWidth(), getHeight());
 #endif
         setVisible(true);
+        if (auto* c = getContentComponent()) c->grabKeyboardFocus();
+    }
+    // Shortcuts keep working when the user returns to the window.
+    void activeWindowStatusChanged() override {
+        DocumentWindow::activeWindowStatusChanged();
+        if (isActiveWindow())
+            if (auto* c = getContentComponent())
+                if (!c->hasKeyboardFocus(true)) c->grabKeyboardFocus();
     }
     void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
+
+private:
+    bool keyPressed(const juce::KeyPress& key, juce::Component*) override {
+        auto* mc = dynamic_cast<MainComponent*>(getContentComponent());
+        return mc != nullptr && mc->keyPressed(key);
+    }
+    bool keyStateChanged(bool isKeyDown, juce::Component*) override {
+        auto* mc = dynamic_cast<MainComponent*>(getContentComponent());
+        return mc != nullptr && mc->keyStateChanged(isKeyDown);
+    }
 };
 
 juce::File pluginCacheFile() {

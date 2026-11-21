@@ -41,6 +41,24 @@ bool deleteClip(Project& p, const std::string& trackId, const std::string& clipI
 // MIDI clips (notes outside the range are untouched). Returns how many were removed.
 int eraseNotesInRange(Track& track, int64_t fromTick, int64_t toTick);
 
+// ---- Tracks and plugins ---------------------------------------------------------------
+// Adds a track at the end; instrument tracks start with the builtin Ynot Synth so they
+// make sound on every platform. Returns the new track's id.
+std::string addTrack(Project& p, TrackKind kind, const std::string& name = {});
+bool removeTrack(Project& p, const std::string& trackId);
+bool renameTrack(Project& p, const std::string& trackId, const std::string& name);
+// Inserts an effect at `index` (-1 = end of the chain). Returns the plugin's id, empty on failure.
+std::string addInsert(Project& p, const std::string& trackId, PluginInstance plugin, int index = -1);
+// Replaces the instrument of an instrument track. Returns false for audio tracks.
+bool setInstrument(Project& p, const std::string& trackId, PluginInstance plugin);
+// Removes an instrument or an insert by plugin id.
+bool removePlugin(Project& p, const std::string& trackId, const std::string& pluginId);
+bool setPluginBypassed(Project& p, const std::string& trackId, const std::string& pluginId, bool bypassed);
+// Moves an insert within the chain.
+bool moveInsert(Project& p, const std::string& trackId, const std::string& pluginId, int newIndex);
+// The colours new tracks cycle through (matches design/tokens.json trackPalette).
+const std::vector<std::string>& trackPalette();
+
 // Clip geometry independent of kind, for UIs.
 struct ClipSpan {
     std::string trackId, clipId;

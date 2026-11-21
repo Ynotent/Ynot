@@ -195,6 +195,7 @@ std::unique_ptr<ynot::PluginProcessor> JucePluginHost::load(const ynot::PluginIn
     if (state.getSize() > 0) inst->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
     auto adapter = std::make_shared<JuceProcessorAdapter>(std::move(inst), sr, maxBlock);
     entry.processor = adapter;
+    entry.adapter = adapter;
     entry.getState = [w = std::weak_ptr<JuceProcessorAdapter>(adapter)](juce::MemoryBlock& mb) {
         auto a = w.lock();
         if (!a) return false;
@@ -203,6 +204,82 @@ std::unique_ptr<ynot::PluginProcessor> JucePluginHost::load(const ynot::PluginIn
     };
     live_[key] = entry;
     return std::make_unique<SharedProcessorRef>(adapter);
+}
+
+std::vector<juce::PluginDescription> JucePluginHost::availablePlugins(bool instruments) const {
+    std::vector<juce::PluginDescription> out;
+    const auto platform = ynot::currentPlatform();
+    for (const auto& d : known_.getTypes()) {
+        auto f = ynotFormatFor(d);
+        if (!f || !ynot::platformLoadsFormat(platform, *f) || d.isInstrument != instruments) continue;
+        out.push_back(d);
+    }
+    std::sort(out.begin(), out.end(), [](const juce::PluginDescription& a, const juce::PluginDescription& b) {
+        const int m = a.manufacturerName.compareIgnoreCase(b.manufacturerName);
+        return m != 0 ? m < 0 : a.name.compareIgnoreCase(b.name) < 0;
+    });
+    return out;
+}
+
+namespace {
+// In-process plugin window. Keeps the plugin alive while open.
+class PluginWindow : public juce::DocumentWindow {
+public:
+    PluginWindow(std::shared_ptr<JuceProcessorAdapter> a, std::function<void(PluginWindow*)> onClose)
+        : juce::DocumentWindow(a->processor().getName(), juce::Colours::black, juce::DocumentWindow::closeButton),
+          adapter_(std::move(a)), onClose_(std::move(onClose)) {
+        auto& p = adapter_->processor();
+        juce::AudioProcessorEditor* ed = p.hasEditor() ? p.createEditorIfNeeded() : nullptr;
+        if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor(p);
+        setUsingNativeTitleBar(true);
+        setContentOwned(ed, true);
+        setResizable(ed->isResizable(), false);
+        centreWithSize(getWidth(), getHeight());
+        setVisible(true);
+    }
+    ~PluginWindow() override { clearContentComponent(); }  // editor goes before the plugin
+    void closeButtonPressed() override {
+        auto cb = onClose_;
+        juce::MessageManager::callAsync([cb, self = this] { cb(self); });
+    }
+
+private:
+    std::shared_ptr<JuceProcessorAdapter> adapter_;
+    std::function<void(PluginWindow*)> onClose_;
+};
+}  // namespace
+
+bool JucePluginHost::openEditor(const std::string& instanceId) {
+    std::shared_ptr<JuceProcessorAdapter> adapter;
+    SandboxedProcessor* sandbox = nullptr;
+    std::shared_ptr<ynot::PluginProcessor> keepAlive;
+    {
+        std::lock_guard<std::mutex> lock(liveMutex_);
+        for (auto& [key, e] : live_) {
+            if (e.instanceId != instanceId) continue;
+            keepAlive = e.processor.lock();
+            if (!keepAlive) continue;
+            adapter = e.adapter.lock();
+            sandbox = e.sandbox;
+            break;
+        }
+    }
+    if (sandbox) {
+        sandbox->showEditor();
+        return true;
+    }
+    if (!adapter) return false;
+    for (auto& w : editorWindows_)  // already open: bring it forward
+        if (w->getName() == adapter->processor().getName() && w->isVisible()) {
+            w->toFront(true);
+            return true;
+        }
+    editorWindows_.push_back(std::make_unique<PluginWindow>(adapter, [this](PluginWindow* w) {
+        editorWindows_.erase(std::remove_if(editorWindows_.begin(), editorWindows_.end(),
+                                            [w](const auto& p) { return p.get() == w; }),
+                             editorWindows_.end());
+    }));
+    return true;
 }
 
 std::vector<juce::String> JucePluginHost::takeCrashReports() {

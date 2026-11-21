@@ -1,6 +1,8 @@
 #include "PluginSandbox.h"
 
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
+#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <chrono>
 #include <cstring>
@@ -321,6 +323,12 @@ bool SandboxedProcessor::getState(juce::MemoryBlock& out, int timeoutMs) {
     return impl_->stateFile.withFileExtension(".out").loadFileAsData(out);
 }
 
+void SandboxedProcessor::showEditor() {
+    if (!ok_ || dead_.load() || !impl_->shared) return;
+    impl_->shared->editorRequest.fetch_add(1);
+    impl_->wake.post();
+}
+
 bool SandboxedProcessor::pollCrashed() {
     if (!ok_ || impl_->quitting || dead_.load()) {
         if (dead_.load() && !crashReported_) {
@@ -371,6 +379,7 @@ class SandboxChild : private juce::Thread {
 public:
     SandboxChild() : juce::Thread("Ynot plugin sandbox") {}
     ~SandboxChild() override {
+        editorWindow.reset();
         if (shared) shared->quit.store(1);
         wake.post();
         stopThread(2000);
@@ -449,8 +458,39 @@ private:
         return nullptr;
     }
 
+    // The plugin's own editor, in a window owned by this helper process.
+    class EditorWindow : public juce::DocumentWindow {
+    public:
+        EditorWindow(juce::AudioProcessor& p)
+            : juce::DocumentWindow(p.getName(), juce::Colours::black, juce::DocumentWindow::closeButton) {
+            setUsingNativeTitleBar(true);
+            juce::AudioProcessorEditor* ed = p.hasEditor() ? p.createEditorIfNeeded() : nullptr;
+            if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor(p);
+            setContentOwned(ed, true);
+            setResizable(ed->isResizable(), false);
+            centreWithSize(getWidth(), getHeight());
+            setVisible(true);
+            toFront(true);
+        }
+        void closeButtonPressed() override { setVisible(false); }
+    };
+
+    void showEditorOnMessageThread() {
+        if (!juceProcessor) return;  // builtin/test plugins have no window
+#if JUCE_MAC
+        juce::Process::makeForegroundProcess();
+#endif
+        if (editorWindow) {
+            editorWindow->setVisible(true);
+            editorWindow->toFront(true);
+            return;
+        }
+        editorWindow = std::make_unique<EditorWindow>(*juceProcessor);
+    }
+
     void run() override {
         uint64_t resets = 0;
+        uint32_t editors = 0;
         while (!threadShouldExit()) {
             wake.wait();
             if (shared->quit.load()) break;
@@ -459,6 +499,10 @@ private:
                 const auto& pc = shared->params[rd % sandbox::kMaxParams];
                 plugin->setParameter(pc.id, pc.value);
                 shared->paramRead.store(rd + 1, std::memory_order_release);
+            }
+            if (const auto er = shared->editorRequest.load(); er != editors) {
+                editors = er;
+                juce::MessageManager::callAsync([this] { showEditorOnMessageThread(); });
             }
             if (const auto rq = shared->resetRequest.load(); rq != resets) {
                 resets = rq;
@@ -496,6 +540,7 @@ private:
     std::unique_ptr<ynot::PluginProcessor> plugin;
     std::vector<float> l, r;
     std::thread watchdog;
+    std::unique_ptr<juce::DocumentWindow> editorWindow;
 };
 
 std::unique_ptr<SandboxChild> gChild;

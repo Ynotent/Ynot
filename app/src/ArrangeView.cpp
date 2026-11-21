@@ -93,8 +93,24 @@ public:
         g.setFont(juce::FontOptions(th.bodySize + 1.f, juce::Font::bold));
         juce::String title = track_.name;
         if (track_.frozen) title << "  (frozen)";
-        if (stacked_) title << "  \xe2\x96\xbe";  // ▾: tap for the track menu
-        g.drawText(title, stacked_ ? text : text.withTrimmedTop(4), juce::Justification::centredLeft, true);
+        title << "  \xe2\x96\xbe";  // ▾: click/tap for the track menu (instrument, effects...)
+        const auto titleArea = stacked_ ? text : text.withTrimmedTop(4);
+        g.drawText(title, titleArea, juce::Justification::centredLeft, true);
+        // Plugin chain after the name, e.g. "Ynot Synth > Gain > ProVerb (off)".
+        juce::String chain;
+        auto add = [&](const ynot::PluginInstance& pl) {
+            if (chain.isNotEmpty()) chain << " > ";
+            chain << juce::String(pl.name) << (pl.bypassed ? " (off)" : "");
+        };
+        if (track_.instrument) add(*track_.instrument);
+        for (auto& pl : track_.inserts) add(pl);
+        if (chain.isNotEmpty()) {
+            const juce::Font titleFont(juce::FontOptions(th.bodySize + 1.f, juce::Font::bold));
+            const int used = static_cast<int>(juce::GlyphArrangement::getStringWidth(titleFont, title)) + 12;
+            g.setColour(th.textMuted);
+            g.setFont(juce::FontOptions(th.bodySize - 1.f));
+            g.drawText(chain, titleArea.withTrimmedLeft(used), juce::Justification::centredLeft, true);
+        }
         if (recordingHere) {
             g.setColour(th.record);
             g.setFont(juce::FontOptions(th.bodySize, juce::Font::bold));
@@ -103,13 +119,13 @@ public:
         }
     }
 
+    // Click the track name: instrument, effects, freeze, rename, delete.
     void mouseUp(const juce::MouseEvent& e) override {
-        if (!stacked_ || e.mouseWasDraggedSinceMouseDown()) return;
-        juce::PopupMenu m;
-        m.addItem(track_.frozen ? "Unfreeze" : "Freeze", track_.frozen || canFreeze_, false,
-                  [this] { freeze_.triggerClick(); });
-        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this));
+        if (e.mouseWasDraggedSinceMouseDown()) return;
+        owner_.showTrackMenu(id_, this);
     }
+    void triggerFreeze() { freeze_.triggerClick(); }
+    bool canFreeze() const { return canFreeze_; }
 
     void resized() override {
         auto r = getLocalBounds().reduced(8, 5);
@@ -770,6 +786,134 @@ bool ArrangeView::splitSelectedAtPlayhead() {
     const int64_t at = session_.positionTick();
     session_.edit([&](ynot::Project& p) { ok = ynot::splitClip(p, sel.trackId, sel.clipId, at).has_value(); });
     return ok;
+}
+
+namespace {
+// Installed plugins as a menu, grouped by manufacturer.
+juce::PopupMenu pluginBrowserMenu(const std::vector<juce::PluginDescription>& plugins,
+                                  std::function<void(const juce::PluginDescription&)> onPick) {
+    juce::PopupMenu m;
+    if (plugins.empty()) {
+        m.addItem("No plugins found yet: use Plugins > Scan for plugins", false, false, [] {});
+        return m;
+    }
+    juce::String maker;
+    juce::PopupMenu group;
+    auto flush = [&] {
+        if (maker.isNotEmpty()) m.addSubMenu(maker, group);
+        group = juce::PopupMenu();
+    };
+    for (const auto& d : plugins) {
+        const auto mk = d.manufacturerName.isEmpty() ? juce::String("Other") : d.manufacturerName;
+        if (mk != maker) {
+            flush();
+            maker = mk;
+        }
+        group.addItem(d.name + "  (" + d.pluginFormatName + ")", [onPick, d] { onPick(d); });
+    }
+    flush();
+    return m;
+}
+}  // namespace
+
+void ArrangeView::showTrackMenu(const std::string& trackId, juce::Component* target) {
+    const auto* t = session_.project().findTrack(trackId);
+    if (!t) return;
+    const ynot::Track track = *t;  // snapshot: the menu outlives this call
+    auto& session = session_;
+    auto& host = host_;
+    juce::PopupMenu m;
+    m.addSectionHeader(track.name);
+
+    auto pluginItems = [&](const ynot::PluginInstance& pl, bool isInstrument) {
+        juce::PopupMenu sub;
+        const bool builtin = pl.format == ynot::PluginFormat::Builtin;
+        sub.addItem(builtin ? "Open window (built-ins have no window yet)" : "Open window", !builtin, false,
+                    [&host, id = pl.id] { host.openEditor(id); });
+        sub.addItem("Bypass", true, pl.bypassed, [&session, tid = track.id, pid = pl.id, b = pl.bypassed] {
+            session.edit([&](ynot::Project& p) { ynot::setPluginBypassed(p, tid, pid, !b); });
+        });
+        if (!isInstrument) {
+            int index = 0;
+            for (size_t i = 0; i < track.inserts.size(); ++i)
+                if (track.inserts[i].id == pl.id) index = static_cast<int>(i);
+            sub.addItem("Move up", index > 0, false, [&session, tid = track.id, pid = pl.id, index] {
+                session.edit([&](ynot::Project& p) { ynot::moveInsert(p, tid, pid, index - 1); });
+            });
+            sub.addItem("Move down", index + 1 < static_cast<int>(track.inserts.size()), false,
+                        [&session, tid = track.id, pid = pl.id, index] {
+                            session.edit([&](ynot::Project& p) { ynot::moveInsert(p, tid, pid, index + 1); });
+                        });
+        }
+        sub.addSeparator();
+        sub.addItem("Remove", [&session, tid = track.id, pid = pl.id] {
+            session.edit([&](ynot::Project& p) { ynot::removePlugin(p, tid, pid); });
+        });
+        return sub;
+    };
+
+    if (track.kind == ynot::TrackKind::Instrument) {
+        if (track.instrument)
+            m.addSubMenu("Instrument: " + juce::String(track.instrument->name), pluginItems(*track.instrument, true));
+        juce::PopupMenu choose;
+        choose.addItem("Ynot Synth (built-in)", [&session, tid = track.id] {
+            session.edit([&](ynot::Project& p) { ynot::setInstrument(p, tid, ynot::makeBuiltin(ynot::kBuiltinSynth, "Ynot Synth")); });
+        });
+        choose.addSeparator();
+        auto installed = pluginBrowserMenu(host.availablePlugins(true), [&session, &host, tid = track.id](const juce::PluginDescription& d) {
+            if (auto inst = host.makeInstance(d))
+                session.edit([&](ynot::Project& p) { ynot::setInstrument(p, tid, *inst); });
+        });
+        choose.addSubMenu("Installed instruments", installed);
+        m.addSubMenu(track.instrument ? "Change instrument" : "Choose instrument", choose);
+        m.addSeparator();
+    }
+
+    if (!track.inserts.empty()) {
+        m.addSectionHeader("Effects");
+        for (const auto& pl : track.inserts)
+            m.addSubMenu(juce::String(pl.name) + (pl.bypassed ? " (off)" : ""), pluginItems(pl, false));
+    }
+    juce::PopupMenu addFx;
+    addFx.addItem("Gain (built-in)", [&session, tid = track.id] {
+        session.edit([&](ynot::Project& p) { ynot::addInsert(p, tid, ynot::makeBuiltin(ynot::kBuiltinGain, "Gain")); });
+    });
+    addFx.addItem("Lowpass filter (built-in)", [&session, tid = track.id] {
+        session.edit([&](ynot::Project& p) { ynot::addInsert(p, tid, ynot::makeBuiltin(ynot::kBuiltinFilter, "Lowpass")); });
+    });
+    addFx.addSeparator();
+    addFx.addSubMenu("Installed effects",
+                     pluginBrowserMenu(host.availablePlugins(false), [&session, &host, tid = track.id](const juce::PluginDescription& d) {
+                         if (auto inst = host.makeInstance(d))
+                             session.edit([&](ynot::Project& p) { ynot::addInsert(p, tid, *inst); });
+                     }));
+    m.addSubMenu("Add effect", addFx);
+    m.addSeparator();
+
+    if (auto* header = dynamic_cast<TrackHeader*>(target))
+        m.addItem(track.frozen ? "Unfreeze" : "Freeze", track.frozen || header->canFreeze(), false,
+                  [safe = juce::Component::SafePointer<TrackHeader>(header)] {
+                      if (safe) safe->triggerFreeze();
+                  });
+    m.addItem("Rename...", [this, tid = track.id, name = track.name] { renameTrackDialog(tid, name); });
+    m.addItem("Delete track", [&session, tid = track.id] {
+        session.edit([&](ynot::Project& p) { ynot::removeTrack(p, tid); });
+    });
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(target));
+}
+
+void ArrangeView::renameTrackDialog(const std::string& trackId, const std::string& current) {
+    auto* w = new juce::AlertWindow("Rename track", {}, juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("name", current);
+    w->addButton("Rename", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<ArrangeView> safe(this);
+    w->enterModalState(true, juce::ModalCallbackFunction::create([safe, w, trackId](int result) {
+        if (result == 1 && safe) {
+            const auto name = w->getTextEditorContents("name").trim().toStdString();
+            safe->session_.edit([&](ynot::Project& p) { ynot::renameTrack(p, trackId, name); });
+        }
+    }), true);
 }
 
 bool ArrangeView::selectedIsMidi() const {
