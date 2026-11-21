@@ -94,7 +94,12 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     openButton_.onClick = [this] { openProject(); };
     saveButton_.onClick = [this] { session_.save(); };
     audioButton_.onClick = [this] { showAudioSettings(); };
-    scanButton_.onClick = [this] { scanPlugins(); };
+    scanButton_.setButtonText("Plugins");
+    scanButton_.onClick = [this] {
+        juce::PopupMenu m;
+        addPluginItems(m);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(scanButton_));
+    };
     moreButton_.onClick = [this] { showMoreMenu(); };
     prepareButton_.onClick = [this] { prepareForMobile(); };
     compatSummary_.onClick = [this] { showCompatibilityDialog(); };
@@ -228,6 +233,10 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
 }
 
 void MainComponent::timerCallback() {
+    // A sandboxed plugin crashed: tell the user (once) — playback carries on without it.
+    for (const auto& report : host_.takeCrashReports())
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Plugin problem",
+                                               report + "\n\nUse Plugins > Restart crashed plugins to try again.");
     if (!session_.hasProject()) return;
     auto* dev = session_.device().manager().getCurrentAudioDevice();
     juce::String s;
@@ -373,8 +382,21 @@ void MainComponent::showMoreMenu() {
     m.addItem("Prepare for iPhone & Android", !session_.tracksToPrepareForMobile().empty(), false,
               [this] { prepareForMobile(); });
     m.addItem("Audio settings...", [this] { showAudioSettings(); });
-    if (canScanPlugins()) m.addItem("Scan plugins", [this] { scanPlugins(); });
+    if (canScanPlugins()) {
+        juce::PopupMenu pm;
+        addPluginItems(pm);
+        m.addSubMenu("Plugins", pm);
+    }
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(moreButton_));
+}
+
+void MainComponent::addPluginItems(juce::PopupMenu& m) {
+    m.addItem(scanning_ ? "Scanning..." : "Scan for plugins", !scanning_, false, [this] { scanPlugins(); });
+    m.addItem("Run plugins safely (separate processes)", true, host_.sandboxEnabled(), [this] {
+        host_.setSandboxEnabled(!host_.sandboxEnabled());
+        session_.reload();  // reload plugins in the chosen mode
+    });
+    m.addItem("Restart crashed plugins", [this] { session_.reload(); });
 }
 
 void MainComponent::addQuantizeItems(juce::PopupMenu& m) {
@@ -496,7 +518,7 @@ void MainComponent::scanPlugins() {
             if (!safe) return;
             safe->scanning_ = false;
             safe->host_.saveCache(pluginCacheFile());
-            safe->scanButton_.setButtonText("Scan Plugins");
+            safe->scanButton_.setButtonText("Plugins");
             safe->scanButton_.setEnabled(true);
             safe->session_.reload();  // newly found plugins become live (not an undoable edit)
             juce::String msg;

@@ -10,12 +10,17 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <map>
+#include <functional>
 #include <mutex>
 
 #include "ynot/compatibility.hpp"
 #include "ynot/engine.hpp"
 
 namespace ynotapp {
+
+class SandboxedProcessor;
+// Adds the plugin formats this platform can host (VST3 on desktop, AU on Apple).
+void addPluginFormats(juce::AudioPluginFormatManager& fm);
 
 // Plugin ids that are the same on every machine (JUCE's own identifier string
 // contains a file-path hash, which differs between computers).
@@ -83,9 +88,13 @@ public:
     std::optional<ynot::PluginInstance> makeInstance(const juce::PluginDescription& d) const;
     const juce::KnownPluginList& knownPlugins() const { return known_; }
 
-    // Bookkeeping for loaded instances (called by the adapters this host creates).
-    void registerLive(const std::string& id, JuceProcessorAdapter* a);
-    void unregisterLive(const std::string& id, JuceProcessorAdapter* a);
+    // Run third-party plugins in sandbox processes (this executable with --plugin-sandbox).
+    // On by default on desktop once the executable is set.
+    void setSandboxExecutable(const juce::File& exe) { sandboxExecutable_ = exe; }
+    void setSandboxEnabled(bool on) { sandboxEnabled_ = on; }
+    bool sandboxEnabled() const { return sandboxEnabled_; }
+    // Message thread: plugins that crashed (or failed to load in a sandbox) since last call.
+    std::vector<juce::String> takeCrashReports();
 
     // Writes each live plugin's current state back into the project (before save/handoff).
     void captureState(ynot::Project& project) const;
@@ -94,8 +103,19 @@ private:
     juce::AudioPluginFormatManager formats_;
     juce::KnownPluginList known_;
     ynot::BuiltinPluginHost builtin_;
+    // Live plugin instances, shared by successive engines so edits don't reload plugins.
+    struct LiveEntry {
+        std::string instanceId;
+        std::weak_ptr<ynot::PluginProcessor> processor;
+        SandboxedProcessor* sandbox = nullptr;  // valid while processor is alive
+        std::function<bool(juce::MemoryBlock&)> getState;
+    };
     mutable std::mutex liveMutex_;
-    std::multimap<std::string, JuceProcessorAdapter*> live_;  // plugin instance id -> loaded adapter
+    std::map<std::string, LiveEntry> live_;
+    std::vector<std::weak_ptr<SandboxedProcessor>> sandboxes_;
+    std::vector<juce::String> crashReports_;
+    juce::File sandboxExecutable_;
+    bool sandboxEnabled_ = true;
 };
 
 }  // namespace ynotapp

@@ -12,7 +12,8 @@ set(YNOT_APP_SOURCES
     src/JucePluginHost.cpp
     src/Session.cpp
     src/MainComponent.cpp
-    src/ArrangeView.cpp)
+    src/ArrangeView.cpp
+    src/PluginSandbox.cpp)
 
 juce_add_gui_app(YnotApp
     PRODUCT_NAME "Ynot"
@@ -58,7 +59,7 @@ target_link_libraries(YnotApp PRIVATE
 
 if(YNOT_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     juce_add_console_app(YnotAppTests PRODUCT_NAME "YnotAppTests")
-    target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp src/JuceAudioDevice.cpp)
+    target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp src/JuceAudioDevice.cpp src/PluginSandbox.cpp)
     target_compile_definitions(YnotAppTests PRIVATE ${YNOT_JUCE_DEFS})
     # Same JUCE modules as the app: plugin hosting on macOS needs frameworks (e.g. CoreAudioKit
     # for AU generic views) that only the full module set pulls in.

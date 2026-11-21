@@ -135,9 +135,25 @@ Done so far (built and tested on the Linux dev host only):
   - Results are cached per machine, so launches don't rescan.
   - The smoke test exercises the success, crash and hang paths with real child processes.
 
+- **Out-of-process plugin processing (sandboxing):**
+  - Third-party plugins run in helper processes (`--plugin-sandbox`). Audio and MIDI pass
+    through shared memory, and a named semaphore wakes the helper, so idle helpers use no CPU.
+  - Processing happens in the same block, so no latency is added.
+  - The audio thread waits at most 60% of a block for a result. A late plugin is skipped for
+    that block (effects pass through, instruments go silent) without stalling the mix.
+  - A crashed helper is detected, the plugin is bypassed, and the user is told. Plugins >
+    Restart crashed plugins brings it back. Helpers exit if Ynot itself dies.
+  - Settings: Plugins > "Run plugins safely (separate processes)", on by default.
+  - Plugins are now kept alive across edits. Previously every edit, even toggling mute,
+    reloaded every plugin.
+  - Verified with real helper processes: identical output to in-process, parameters and state
+    round-trip, crash detected and bypassed, and a too-slow plugin skipped without stalling
+    (about 0.16 ms per call).
+  - **Not yet verified with real third-party AU/VST3 plugins:** no CI machine has any
+    installed. That's for the tester's Mac (checklist step 10 onwards).
+
 Still to do:
-- Out-of-process plugin *processing* (a crashing plugin during playback still takes down the
-  app); plugin editor windows. Real-device plugin scan with the tester's AU/VST3 collection
+- Plugin editor windows. For sandboxed plugins they will open in the helper's own window. Real-device plugin scan with the tester's AU/VST3 collection
   (checklist step 10).
 - Loop/cycle recording with take lanes; count-in length choice (currently 1 bar).
 - MIDI recording from controllers onto instrument tracks.

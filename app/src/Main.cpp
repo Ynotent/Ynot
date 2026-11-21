@@ -11,6 +11,7 @@
 #include <iostream>
 
 #include "MainComponent.h"
+#include "PluginSandbox.h"
 
 namespace ynotapp {
 
@@ -193,6 +194,84 @@ static int runSmokeTest(const juce::File& dir) {
                "scan results are remembered between launches");
     }
 
+    {   // Plugin sandbox: DSP in a helper process; crashes and slow plugins can't hurt the host.
+        const auto self = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+        auto spec = [&](juce::String format, juce::String id, juce::String state = {}) {
+            SandboxedProcessor::Spec sp;
+            sp.executable = self;
+            sp.formatName = format;
+            sp.identifier = id;
+            sp.state.append(state.toRawUTF8(), state.getNumBytesAsUTF8());
+            sp.sampleRate = 48000;
+            sp.maxBlock = 256;
+            sp.displayName = id;
+            return sp;
+        };
+        const int n = 256;
+        std::vector<float> l(n), r(n), l2(n), r2(n);
+        auto fill = [&](std::vector<float>& a, std::vector<float>& b, int block) {
+            for (int i = 0; i < n; ++i) a[static_cast<size_t>(i)] = b[static_cast<size_t>(i)] =
+                std::sin(0.05f * static_cast<float>(block * n + i));
+        };
+
+        // 1. A builtin effect in a sandbox sounds identical to in-process, with no added latency.
+        SandboxedProcessor boxed(spec("Builtin", ynot::kBuiltinGain, R"({"gainDb": -6})"));
+        ynot::PluginInstance gainInst = ynot::makeBuiltin(ynot::kBuiltinGain, "Gain");
+        gainInst.params["gainDb"] = -6.0;
+        auto local = ynot::BuiltinPluginHost{}.load(gainInst, 48000, n);
+        double maxDiff = 0;
+        for (int b = 0; b < 50; ++b) {
+            fill(l, r, b);
+            fill(l2, r2, b);
+            boxed.process(l.data(), r.data(), n, nullptr, 0);
+            local->process(l2.data(), r2.data(), n, nullptr, 0);
+            for (int i = 0; i < n; ++i) maxDiff = std::max(maxDiff, static_cast<double>(std::abs(l[size_t(i)] - l2[size_t(i)])));
+        }
+        expect(boxed.ok() && maxDiff < 1e-6 && boxed.lateBlocks() == 0,
+               "sandboxed plugin output matches in-process exactly (same block, no latency)");
+
+        // 2. Parameters and state cross the process boundary.
+        SandboxedProcessor test(spec("YnotSandboxTest", "gain2", "my-plugin-state"));
+        fill(l, r, 0);
+        const float before = l[100];
+        test.process(l.data(), r.data(), n, nullptr, 0);
+        test.setParameter("gain", 0.75);  // -> x3
+        fill(l2, r2, 0);
+        test.process(l2.data(), r2.data(), n, nullptr, 0);
+        juce::MemoryBlock st;
+        expect(std::abs(l[100] - 2 * before) < 1e-5f && std::abs(l2[100] - 3 * before) < 1e-5f &&
+                   test.getState(st) && st.toString() == "my-plugin-state",
+               "sandbox passes audio, parameter changes and plugin state");
+
+        // 3. A plugin that crashes mid-playback is switched off; the host keeps running.
+        SandboxedProcessor crashy(spec("YnotSandboxTest", "crash-after:5"));
+        bool crashedNoticed = false, dryAfterCrash = false;
+        for (int b = 0; b < 40 && !crashedNoticed; ++b) {
+            fill(l, r, b);
+            crashy.process(l.data(), r.data(), n, nullptr, 0);
+            juce::Thread::sleep(5);
+            crashedNoticed = crashy.pollCrashed();
+        }
+        fill(l, r, 99);
+        const float dry = l[50];
+        crashy.process(l.data(), r.data(), n, nullptr, 0);
+        dryAfterCrash = std::abs(l[50] - dry) < 1e-9f;
+        expect(crashedNoticed && dryAfterCrash, "a plugin that crashes is detected and bypassed; Ynot keeps running");
+
+        // 4. A plugin too slow for real time never stalls the audio thread.
+        SandboxedProcessor slow(spec("YnotSandboxTest", "slow"));
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int b = 0; b < 20; ++b) {
+            fill(l, r, b);
+            slow.process(l.data(), r.data(), n, nullptr, 0);
+        }
+        const double perBlockMs = (juce::Time::getMillisecondCounterHiRes() - t0) / 20.0;
+        expect(slow.lateBlocks() > 0 && perBlockMs < 4.0,
+               "a too-slow plugin is skipped per block without stalling audio");
+        std::cout << "  info sandbox: slow plugin skipped " << slow.lateBlocks() << "/20 blocks, "
+                  << juce::String(perBlockMs, 2) << " ms per call" << std::endl;
+    }
+
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     expect(ynot::projectToJson(reopened) == ynot::projectToJson(session.project()), "save/reopen is lossless");
@@ -250,11 +329,23 @@ public:
     // The plugin-scan helper and test modes run alongside the real app.
     bool moreThanOneInstanceAllowed() override {
         const auto args = getCommandLineParameters();
-        return args.contains("--scan-one") || args.contains("--smoke-test") || args.contains("--screenshot");
+        return args.contains("--scan-one") || args.contains("--plugin-sandbox") || args.contains("--smoke-test") ||
+               args.contains("--screenshot");
     }
 
     void initialise(const juce::String& commandLine) override {
         auto args = juce::StringArray::fromTokens(commandLine, true);
+        if (args.contains("--plugin-sandbox")) {  // plugin sandbox helper: runs one plugin, no window
+#if JUCE_MAC
+            juce::Process::setDockIconVisible(false);
+#endif
+            const int rc = runSandboxChild(args);
+            if (rc != 0) {
+                setApplicationReturnValue(rc);
+                quit();
+            }
+            return;  // keeps running (message loop alive for the plugin) until the host says quit
+        }
         if (args.contains("--scan-one")) {  // plugin-scan helper process: no window, no audio
 #if JUCE_MAC
             juce::Process::setDockIconVisible(false);
@@ -276,6 +367,7 @@ public:
                 ynot::platformFromString(args[args.indexOf("--layout-as") + 1].toStdString());
         host_ = std::make_unique<JucePluginHost>();
         host_->loadCache(pluginCacheFile());  // plugins scanned on a previous launch
+        host_->setSandboxExecutable(juce::File::getSpecialLocation(juce::File::currentExecutableFile));
         session_ = std::make_unique<Session>(*host_);
         if (args.contains("--open")) {
             try {
@@ -308,6 +400,7 @@ public:
     }
 
     void shutdown() override {
+        shutdownSandboxChild();
         simulated_.reset();
         window_.reset();
         session_.reset();

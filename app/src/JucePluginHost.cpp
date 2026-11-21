@@ -1,5 +1,7 @@
 #include "JucePluginHost.h"
 
+#include "PluginSandbox.h"
+
 #include "ynot/platform.hpp"
 
 namespace ynotapp {
@@ -85,22 +87,6 @@ void JuceProcessorAdapter::setParameter(const std::string& id, double v) {
 
 void JuceProcessorAdapter::reset() { proc_->reset(); }
 
-namespace {
-// Adapter that tells the host when it's created/destroyed, so the host can
-// capture the state of live plugins before saving.
-class TrackedAdapter : public JuceProcessorAdapter {
-public:
-    TrackedAdapter(JucePluginHost& host, std::string id, std::unique_ptr<juce::AudioProcessor> p, double sr, int mb)
-        : JuceProcessorAdapter(std::move(p), sr, mb), host_(host), id_(std::move(id)) {
-        host_.registerLive(id_, this);
-    }
-    ~TrackedAdapter() override { host_.unregisterLive(id_, this); }
-
-private:
-    JucePluginHost& host_;
-    std::string id_;
-};
-}  // namespace
 
 // ---------------------------------------------------------------- host
 
@@ -110,7 +96,9 @@ constexpr const char* kTestFormat = "YnotScanTest";
 
 // VST3 hosting exists only on desktop; on iOS/Android JUCE declares the class without an
 // implementation, so it must not even be compiled there.
-void addDesktopFormats(juce::AudioPluginFormatManager& fm) {
+}  // namespace
+
+void addPluginFormats(juce::AudioPluginFormatManager& fm) {
     const auto platform = ynot::currentPlatform();
 #if JUCE_PLUGINHOST_VST3 && (JUCE_MAC || JUCE_WINDOWS || JUCE_LINUX)
     if (ynot::platformLoadsFormat(platform, ynot::PluginFormat::VST3)) fm.addFormat(new juce::VST3PluginFormat());
@@ -120,23 +108,10 @@ void addDesktopFormats(juce::AudioPluginFormatManager& fm) {
 #endif
     juce::ignoreUnused(platform, fm);
 }
-}  // namespace
 
-JucePluginHost::JucePluginHost() { addDesktopFormats(formats_); }
+JucePluginHost::JucePluginHost() { addPluginFormats(formats_); }
 
 JucePluginHost::~JucePluginHost() = default;
-
-void JucePluginHost::registerLive(const std::string& id, JuceProcessorAdapter* a) {
-    std::lock_guard<std::mutex> lock(liveMutex_);
-    live_.emplace(id, a);
-}
-
-void JucePluginHost::unregisterLive(const std::string& id, JuceProcessorAdapter* a) {
-    std::lock_guard<std::mutex> lock(liveMutex_);
-    auto [b, e] = live_.equal_range(id);
-    for (auto it = b; it != e; ++it)
-        if (it->second == a) { live_.erase(it); return; }
-}
 
 bool JucePluginHost::isAvailable(const ynot::PluginInstance& p) const {
     if (p.format == ynot::PluginFormat::Builtin) return builtin_.isAvailable(p);
@@ -145,6 +120,21 @@ bool JucePluginHost::isAvailable(const ynot::PluginInstance& p) const {
         if (ynotFormatFor(d) == p.format && portableUid(d) == p.uid) return true;
     return false;
 }
+
+namespace {
+// Lets several engines (the live one and the one being prepared after an edit) share one
+// plugin instance, so edits don't reload plugins or restart their sandboxes.
+class SharedProcessorRef : public ynot::PluginProcessor {
+public:
+    explicit SharedProcessorRef(std::shared_ptr<ynot::PluginProcessor> p) : p_(std::move(p)) {}
+    void process(float* l, float* r, int n, const ynot::MidiEvent* e, int ne) override { p_->process(l, r, n, e, ne); }
+    void setParameter(const std::string& id, double v) override { p_->setParameter(id, v); }
+    void reset() override { p_->reset(); }
+
+private:
+    std::shared_ptr<ynot::PluginProcessor> p_;
+};
+}  // namespace
 
 std::unique_ptr<ynot::PluginProcessor> JucePluginHost::load(const ynot::PluginInstance& p, double sr,
                                                             int maxBlock) {
@@ -156,15 +146,80 @@ std::unique_ptr<ynot::PluginProcessor> JucePluginHost::load(const ynot::PluginIn
         if (ynotFormatFor(d) == p.format && portableUid(d) == p.uid) { desc = d; found = true; break; }
     if (!found) return nullptr;
 
+    const bool sandboxed = sandboxEnabled_ && sandboxExecutable_.existsAsFile();
+    const std::string key = p.id + "|" + p.uid + "|" + std::to_string(sr) + "|" + std::to_string(maxBlock) +
+                            (sandboxed ? "|sandbox" : "|inproc");
+    std::lock_guard<std::mutex> lock(liveMutex_);
+    if (auto it = live_.find(key); it != live_.end()) {
+        auto existing = it->second.processor.lock();
+        const bool deadSandbox = it->second.sandbox && it->second.sandbox->isDead();
+        if (existing && !deadSandbox) return std::make_unique<SharedProcessorRef>(existing);
+        live_.erase(it);  // gone, or crashed: create a fresh one
+    }
+
+    const auto state = decodeState(p.stateBase64);
+    LiveEntry entry;
+    entry.instanceId = p.id;
+    if (sandboxed) {
+        SandboxedProcessor::Spec spec;
+        spec.executable = sandboxExecutable_;
+        spec.formatName = desc.pluginFormatName;
+        spec.identifier = desc.fileOrIdentifier;
+        spec.uid = p.uid;
+        spec.state = state;
+        spec.sampleRate = sr;
+        spec.maxBlock = maxBlock;
+        spec.isInstrument = desc.isInstrument;
+        spec.displayName = desc.name;
+        auto sb = std::make_shared<SandboxedProcessor>(spec);
+        if (!sb->ok()) {
+            crashReports_.push_back(desc.name + ": " + sb->error());
+            return nullptr;
+        }
+        entry.sandbox = sb.get();
+        entry.processor = sb;
+        entry.getState = [w = std::weak_ptr<SandboxedProcessor>(sb)](juce::MemoryBlock& mb) {
+            auto s = w.lock();
+            return s && s->getState(mb);
+        };
+        live_[key] = entry;
+        sandboxes_.push_back(sb);
+        return std::make_unique<SharedProcessorRef>(sb);
+    }
+
     juce::String error;
     // Synchronous creation must run on the message thread. AUv3 on iOS needs the
     // async API; the iOS shell (M4) adds that path.
     std::unique_ptr<juce::AudioProcessor> inst = formats_.createPluginInstance(desc, sr, maxBlock, error);
     if (!inst) return nullptr;
-    auto state = decodeState(p.stateBase64);
     if (state.getSize() > 0) inst->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
-    return std::make_unique<TrackedAdapter>(*this, p.id, std::move(inst), sr, maxBlock);
+    auto adapter = std::make_shared<JuceProcessorAdapter>(std::move(inst), sr, maxBlock);
+    entry.processor = adapter;
+    entry.getState = [w = std::weak_ptr<JuceProcessorAdapter>(adapter)](juce::MemoryBlock& mb) {
+        auto a = w.lock();
+        if (!a) return false;
+        a->processor().getStateInformation(mb);
+        return true;
+    };
+    live_[key] = entry;
+    return std::make_unique<SharedProcessorRef>(adapter);
 }
+
+std::vector<juce::String> JucePluginHost::takeCrashReports() {
+    std::lock_guard<std::mutex> lock(liveMutex_);
+    std::vector<juce::String> out;
+    std::swap(out, crashReports_);
+    for (auto it = sandboxes_.begin(); it != sandboxes_.end();) {
+        auto sb = it->lock();
+        if (!sb) { it = sandboxes_.erase(it); continue; }
+        if (sb->pollCrashed())
+            out.push_back(sb->displayName() + " crashed and was switched off. Ynot kept running; "
+                                              "your project and the plugin's last saved settings are safe.");
+        ++it;
+    }
+    return out;
+}
+
 
 
 int JucePluginHost::runScanChild(const juce::StringArray& args) {
@@ -187,7 +242,7 @@ int JucePluginHost::runScanChild(const juce::StringArray& args) {
         return root.writeTo(out) ? 0 : 3;
     }
     juce::AudioPluginFormatManager fm;
-    addDesktopFormats(fm);
+    addPluginFormats(fm);
     for (auto* f : fm.getFormats())
         if (f->getName() == formatName) {
             juce::OwnedArray<juce::PluginDescription> found;
@@ -303,12 +358,14 @@ std::optional<ynot::PluginInstance> JucePluginHost::makeInstance(const juce::Plu
 void JucePluginHost::captureState(ynot::Project& project) const {
     std::lock_guard<std::mutex> lock(liveMutex_);
     auto capture = [&](ynot::PluginInstance& p) {
-        auto it = live_.find(p.id);
-        if (it == live_.end()) return;
-        juce::MemoryBlock mb;
-        it->second->processor().getStateInformation(mb);
-        p.stateBase64 = encodeState(mb);
-        p.seenOn.insert(ynot::currentPlatform());
+        for (const auto& [key, entry] : live_) {
+            if (entry.instanceId != p.id || !entry.getState) continue;
+            juce::MemoryBlock mb;
+            if (!entry.getState(mb)) continue;
+            p.stateBase64 = encodeState(mb);
+            p.seenOn.insert(ynot::currentPlatform());
+            return;
+        }
     };
     for (auto& t : project.tracks) {
         if (t.instrument) capture(*t.instrument);

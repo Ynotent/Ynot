@@ -49,6 +49,7 @@ private:
     void showMoreMenu();
     void showCompatibilityDialog();
     void addQuantizeItems(juce::PopupMenu& m);
+    void addPluginItems(juce::PopupMenu& m);
     void addPunchItems(juce::PopupMenu& m);
     void addTimeSignatureItems(juce::PopupMenu& m);
     ynot::Platform selectedTarget() const;
