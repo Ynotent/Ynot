@@ -3,6 +3,7 @@
 //   Ynot                        normal GUI launch
 //   Ynot --smoke-test <dir>     headless check of the JUCE <-> core integration (CI)
 //   Ynot --open <dir>           open a project at launch (--show-keys: on-screen keyboard open)
+//   Ynot --simulate-audio       run the audio callback in real time without hardware (UI tests)
 //   Ynot --screenshot <png> <w> <h> [--open <dir>] [--layout-as ios|android|macos|windows]
 //                               render the UI at a size and exit (layout checks)
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -128,6 +129,26 @@ static int runSmokeTest(const juce::File& dir) {
     return failures ? 1 : 0;
 }
 
+// Drives the session's audio callback in real time without hardware (UI tests on machines
+// with no sound card). Same thread model as a real device: a separate high-priority thread.
+class SimulatedAudio : private juce::HighResolutionTimer {
+public:
+    explicit SimulatedAudio(Session& s) : session_(s), in_(256, 0.f), outL_(256), outR_(256) {
+        session_.simulateInputsForTesting(2);
+        startTimer(5);  // ~256 frames at 48 kHz per 5.3 ms
+    }
+    ~SimulatedAudio() override { stopTimer(); }
+
+private:
+    void hiResTimerCallback() override {
+        const float* ins[2] = {in_.data(), in_.data()};
+        float* outs[2] = {outL_.data(), outR_.data()};
+        session_.processForTesting(ins, 2, outs, 2, 240);  // 240 frames = 5 ms at 48 kHz
+    }
+    Session& session_;
+    std::vector<float> in_, outL_, outR_;
+};
+
 class MainWindow : public juce::DocumentWindow {
 public:
     MainWindow(const juce::String& name, Session& session, JucePluginHost& host)
@@ -193,10 +214,12 @@ public:
             });
             return;
         }
-        session_->startAudio();  // default device; the user can change it in Audio settings
+        if (args.contains("--simulate-audio")) simulated_ = std::make_unique<SimulatedAudio>(*session_);
+        else session_->startAudio();  // default device; the user can change it in Audio settings
     }
 
     void shutdown() override {
+        simulated_.reset();
         window_.reset();
         session_.reset();
         host_.reset();
@@ -211,6 +234,7 @@ private:
     std::unique_ptr<JucePluginHost> host_;
     std::unique_ptr<Session> session_;
     std::unique_ptr<MainWindow> window_;
+    std::unique_ptr<SimulatedAudio> simulated_;
 };
 
 }  // namespace ynotapp

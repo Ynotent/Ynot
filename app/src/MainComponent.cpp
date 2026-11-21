@@ -43,14 +43,19 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
                     &moreButton_})
         addAndMakeVisible(*b);
     addChildComponent(keyboard_);
-    keyboard_.setWantsKeyboardFocus(false);  // computer keys stay shortcuts (Space, S, Delete...)
+    // Clicking a button must not steal keyboard focus, or musical typing stops after pressing R/Record.
+    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
+                    &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
+                    &moreButton_, &prepareButton_, &compatSummary_})
+        b->setMouseClickGrabsKeyboardFocus(false);
+    // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
+    // (play/stop) and Return (to start) still work while the keyboard has focus.
+    keyboard_.setWantsKeyboardFocus(true);
+    keyboard_.setKeyPressBaseOctave(5);
     keyboard_.setAvailableRange(24, 108);
     keyboard_.setLowestVisibleKey(48);
     keysButton_.setClickingTogglesState(true);
-    keysButton_.onClick = [this] {
-        keyboard_.setVisible(keysButton_.getToggleState());
-        resized();
-    };
+    keysButton_.onClick = [this] { showKeyboard(keysButton_.getToggleState()); };
     for (auto* c : std::initializer_list<juce::Component*>{&status_, &arrange_, &compatTitle_, &target_,
                                                            &prepareButton_, &compatSummary_, &compat_})
         addAndMakeVisible(*c);
@@ -171,7 +176,22 @@ void MainComponent::resized() {
     arrange_.setLayout(layout_);
 }
 
+namespace {
+bool isMusicalTypingKey(const juce::KeyPress& key) {
+    if (key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) return false;
+    const auto c = juce::CharacterFunctions::toLowerCase(key.getTextCharacter());
+    return c != 0 && juce::String("awsedftgyhujkolp;").containsChar(c);
+}
+}  // namespace
+
+bool MainComponent::keyStateChanged(bool isKeyDown) {
+    // Note on/off from the computer keyboard, whichever part of the window has focus.
+    if (keyboard_.isVisible() && !keyboard_.hasKeyboardFocus(false)) return keyboard_.keyStateChanged(isKeyDown);
+    return false;
+}
+
 bool MainComponent::keyPressed(const juce::KeyPress& key) {
+    if (keyboard_.isVisible() && isMusicalTypingKey(key)) return true;  // handled as a note
     const auto cmd = juce::ModifierKeys::commandModifier;
     if (key == juce::KeyPress('z', cmd, 0)) return session_.undo(), true;
     if (key == juce::KeyPress('z', cmd | juce::ModifierKeys::shiftModifier, 0) ||
@@ -179,6 +199,12 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
         return session_.redo(), true;
     if (key == juce::KeyPress('s', cmd, 0)) return session_.save(), true;
     if (key == juce::KeyPress::spaceKey) return togglePlay(), true;
+    // Return/Enter or Home: back to the start (keeps playing if the transport is running).
+    if (key == juce::KeyPress::returnKey || key == juce::KeyPress::homeKey) {
+        if (!session_.isRecording()) session_.seekToTick(0);
+        arrange_.repaint();
+        return true;
+    }
     return arrange_.keyPressed(key);
 }
 
@@ -197,6 +223,9 @@ void MainComponent::timerCallback() {
     if (keyboard_.isVisible() && armedInstrument.isEmpty()) s << "   Arm an instrument track (R) to play";
     else if (armedInstrument.isNotEmpty() && !session_.isRecording())
         s << "   " << armedInstrument << " armed: playing live. Press Record to capture.";
+    if (keyboard_.isVisible() && armedInstrument.isNotEmpty())
+        s << (keyboard_.hasKeyboardFocus(false) ? "   Type A-K to play notes"
+                                                : "   Click the piano to play notes with A-K");
     const auto virtualOut = session_.device().virtualDeviceWarning();
     if (!virtualOut.empty()) {
         // The most common "I hear nothing": the Mac's default output is a loopback driver.

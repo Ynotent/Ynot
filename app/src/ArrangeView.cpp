@@ -18,7 +18,10 @@ double ticksToBeats(int64_t t) { return static_cast<double>(t) / ynot::kTicksPer
 class ArrangeView::TrackHeader : public juce::Component {
 public:
     explicit TrackHeader(ArrangeView& owner) : owner_(owner) {
-        for (auto* b : {&input_, &arm_, &mute_, &solo_, &freeze_}) addAndMakeVisible(*b);
+        for (auto* b : {&input_, &arm_, &mute_, &solo_, &freeze_}) {
+            addAndMakeVisible(*b);
+            b->setMouseClickGrabsKeyboardFocus(false);  // keep musical typing working after clicking R/M/S
+        }
         arm_.setColour(juce::TextButton::buttonOnColourId, owner_.theme_.record);
         auto& session = owner_.session_;
         arm_.onClick = [this, &session] {
@@ -70,8 +73,17 @@ public:
     void paint(juce::Graphics& g) override {
         auto& th = owner_.theme_;
         auto r = getLocalBounds().reduced(4, 2);
+        const bool recordingHere = track_.armed && owner_.session_.isRecording();
         g.setColour(th.surfaceRaised);
         g.fillRoundedRectangle(r.toFloat(), 6.f);
+        if (recordingHere) {  // this track is capturing right now
+            g.setColour(th.record.withAlpha(0.22f));
+            g.fillRoundedRectangle(r.toFloat(), 6.f);
+        }
+        if (track_.armed) {   // armed: red outline so it's obvious which tracks will record
+            g.setColour(th.record);
+            g.drawRoundedRectangle(r.toFloat().reduced(1.f), 6.f, recordingHere ? 2.5f : 1.5f);
+        }
         g.setColour(Theme::hex(track_.color));
         g.fillRoundedRectangle(r.removeFromLeft(6).toFloat(), 3.f);
         r.removeFromLeft(10);
@@ -82,6 +94,12 @@ public:
         if (track_.frozen) title << "  (frozen)";
         if (stacked_) title << "  \xe2\x96\xbe";  // ▾: tap for the track menu
         g.drawText(title, stacked_ ? text : text.withTrimmedTop(4), juce::Justification::centredLeft, true);
+        if (recordingHere) {
+            g.setColour(th.record);
+            g.setFont(juce::FontOptions(th.bodySize, juce::Font::bold));
+            g.drawText(juce::CharPointer_UTF8("\xe2\x97\x8f REC"), text.withTrimmedTop(stacked_ ? 0 : 4),
+                       juce::Justification::centredRight, false);
+        }
     }
 
     void mouseUp(const juce::MouseEvent& e) override {
@@ -249,6 +267,19 @@ public:
                 drawClip(g, *row.track, c.id, c.startTick, c.lengthTick, lane, color, &c, nullptr);
             for (auto& c : row.track->midiClips)
                 drawClip(g, *row.track, c.id, c.startTick, c.lengthTick, lane, color, nullptr, &c);
+            // Recording in progress: a red region grows from the record point to the playhead.
+            if (row.track->armed && owner_.session_.isRecording()) {
+                const float x0 = static_cast<float>(owner_.tickToX(owner_.session_.recordStartTick()));
+                const float x1 = static_cast<float>(owner_.tickToX(owner_.session_.positionTick()));
+                if (x1 > x0) {
+                    juce::Rectangle<float> rr(x0, static_cast<float>(lane.getY() + 3), x1 - x0,
+                                              static_cast<float>(lane.getHeight() - 6));
+                    g.setColour(th.record.withAlpha(0.28f));
+                    g.fillRoundedRectangle(rr, 4.f);
+                    g.setColour(th.record);
+                    g.drawRoundedRectangle(rr.reduced(0.5f), 4.f, 1.5f);
+                }
+            }
             g.restoreState();
         }
         // Drag ghost.
@@ -701,7 +732,7 @@ bool ArrangeView::deleteSelected() {
 
 bool ArrangeView::keyPressed(const juce::KeyPress& key) {
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) return deleteSelected();
-    if (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S') {
+    if (!musicalTyping_ && (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S')) {
         if (!key.getModifiers().isCommandDown()) return splitSelectedAtPlayhead();
     }
     if (key == juce::KeyPress('=', juce::ModifierKeys::commandModifier, 0)) { zoomAround(laneX0(), 1.25); return true; }

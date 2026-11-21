@@ -23,10 +23,13 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
+    bool keyStateChanged(bool isKeyDown) override;
     void showKeyboard(bool show) {
         keysButton_.setToggleState(show, juce::dontSendNotification);
         keyboard_.setVisible(show);
+        arrange_.setMusicalTyping(show);
         resized();
+        if (show && isShowing()) keyboard_.grabKeyboardFocus();  // type notes right away
     }
 
 private:
@@ -62,7 +65,22 @@ private:
     juce::Label status_;
     ArrangeView arrange_;
     // On-screen keyboard: plays armed instrument tracks exactly like a MIDI controller.
-    juce::MidiKeyboardComponent keyboard_;
+    // While it's open, the computer keyboard plays notes too ("musical typing").
+    class TypingKeyboard : public juce::MidiKeyboardComponent {
+    public:
+        using juce::MidiKeyboardComponent::MidiKeyboardComponent;
+        // Cmd/Ctrl shortcuts (undo, save...) and unmapped keys (Space, Return) go to the window.
+        bool keyPressed(const juce::KeyPress& k) override {
+            if (k.getModifiers().isCommandDown() || k.getModifiers().isCtrlDown()) return false;
+            return juce::MidiKeyboardComponent::keyPressed(k);
+        }
+        bool keyStateChanged(bool isKeyDown) override {
+            if (juce::ModifierKeys::currentModifiers.isCommandDown() || juce::ModifierKeys::currentModifiers.isCtrlDown())
+                return false;
+            return juce::MidiKeyboardComponent::keyStateChanged(isKeyDown);
+        }
+    };
+    TypingKeyboard keyboard_;
 
     // Compatibility: side panel on larger screens, summary button + dialog on phones.
     juce::Label compatTitle_;

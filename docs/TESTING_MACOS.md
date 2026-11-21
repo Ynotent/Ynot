@@ -35,8 +35,8 @@ Use **headphones** for steps 5 and 6. Speakers plus the built-in mic will feed b
 | 4 | Turn on **Click** and play. | A click on every beat, accented on beat 1. |
 | 5 | Arm **Vocals (R)**, turn on **Count-in**, press **Record**, clap on beats 1–4 of bar 2, press **Stop Rec**. | macOS asks for microphone permission the first time; allow it. A new clip appears. On playback, the claps line up with the clicks. *Write down "early", "late" or "on time".* |
 | 6 | With Vocals armed, turn on **Monitor** and speak. | You hear yourself in the headphones. The status line shows a latency figure in ms; note it. |
-| 7 | Arm **Keys (R)**, press **Keys** and click notes on the on-screen keyboard. | The synth plays. If you have a USB/Bluetooth MIDI keyboard, plug it in **before** launching the app and play it too. |
-| 8 | With Keys armed, **Record**, play a few notes, **Stop Rec**. | A MIDI clip with your notes appears, in time. |
+| 7 | Arm **Keys (R)**, press **Keys**, then click notes on the on-screen piano **and** type on your computer keyboard (A W S E D F T G Y H U J K = one octave from middle C). | The synth plays both ways. If you have a USB/Bluetooth MIDI keyboard, plug it in **before** launching the app and play it too. |
+| 8 | With Keys armed, **Record**, play a few notes, **Stop Rec**. Then press **Return**. | While recording, the Keys track shows red **● REC** and a red region grows. Afterwards a MIDI clip with your notes appears, in time. Return jumps back to the start. |
 | 9 | Drag a clip; drag its edges; double-click to split; select and press Delete; then **Cmd+Z** a few times. | Everything works, and undo steps back through it. Also try a trackpad pinch to zoom and a two-finger swipe to scroll. |
 | 10 | **Scan Plugins**, if you have third-party AU/VST3 plugins installed. | It finishes. *If the app crashes here, note which plugin was scanning; out-of-process scanning is a known M1 TODO.* |
 | 11 | **Save**, quit, relaunch and **Open** the project (`~/Documents/Ynot/Demo Song.ynot`). | Everything comes back exactly as saved. |

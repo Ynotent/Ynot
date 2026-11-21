@@ -69,6 +69,7 @@ public:
     RecordResult stopRecording();
     bool isRecording() const { return recording_.load(); }
     double recordingSeconds() const;
+    int64_t recordStartTick() const { return ynot::frameToTick(project_, recordStart_, sampleRate_); }
     int numInputChannels() const;
     std::vector<int> inputFor(const std::string& trackId) const;
     void cycleInput(const std::string& trackId);

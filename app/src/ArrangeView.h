@@ -33,6 +33,8 @@ public:
     bool splitSelectedAtPlayhead();
     bool deleteSelected();
     bool hasSelection() const { return !selected_.clipId.empty(); }
+    // While the on-screen keyboard is open, letter keys play notes instead of editing.
+    void setMusicalTyping(bool on) { musicalTyping_ = on; }
 
     bool keyPressed(const juce::KeyPress& key) override;
     void resized() override;
@@ -67,6 +69,7 @@ private:
     double pixelsPerBeat_ = 60;
     double scrollBeat_ = 0;
     ClipKey selected_;
+    bool musicalTyping_ = false;
 
     std::unique_ptr<Ruler> ruler_;
     std::unique_ptr<Lanes> lanes_;
