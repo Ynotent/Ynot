@@ -16,11 +16,10 @@ Based on CI run #1 (commit `0fea6cc`, 2026-11-21) on GitHub-hosted runners:
 | iOS / iPadOS | **Planned** | Same as macOS: the iOS jobs need a macOS runner and never started. |
 | Linux (dev host only) | n/a | Core with ASan/UBSan and Clang `-Werror`, app build and smoke test pass in CI and locally. |
 
-**macOS runners:** all four macOS-based jobs in run #1 were cancelled within a second with no
-logs, before any step ran. This is a GitHub account setting, not a build error: typically macOS
-runner minutes are unavailable on the account (for example a $0 Actions spending limit on a
-private repository) or an organization policy blocks macOS runners. Until that's resolved, the
-alternatives are a self-hosted Mac runner or attaching a Mac to a session.
+**macOS runners:** all four macOS-based jobs in run #1 were cancelled before any step ran. The
+cause was our workflow: it requested the `macos-14` image, which GitHub retired on
+2026-11-02. The workflow now uses `macos-15`. (The repository is public, so GitHub-hosted macOS
+runners are free; billing was not the issue.)
 
 None of these statuses means the app is usable on that platform. Windows is the furthest along,
 but it has not been run with a real audio interface, plugin or user.
