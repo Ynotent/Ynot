@@ -2,7 +2,7 @@
 //
 //   Ynot                        normal GUI launch
 //   Ynot --smoke-test <dir>     headless check of the JUCE <-> core integration (CI)
-//   Ynot --open <dir>           open a project at launch
+//   Ynot --open <dir>           open a project at launch (--show-keys: on-screen keyboard open)
 //   Ynot --screenshot <png> <w> <h> [--open <dir>] [--layout-as ios|android|macos|windows]
 //                               render the UI at a size and exit (layout checks)
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -88,6 +88,39 @@ static int runSmokeTest(const juce::File& dir) {
                          dir.getChildFile(m->fileName).existsAsFile();
     expect(takeOk, "count-in not recorded; take starts at the record point and is stored as media");
 
+    {   // MIDI: play the on-screen keyboard into the armed Keys track while recording.
+        std::string keysId;
+        for (auto& t : session.project().tracks)
+            if (t.name == "Keys") keysId = t.id;
+        session.edit([&](ynot::Project& p) {
+            for (auto& t : p.tracks) t.armed = t.id == keysId;
+        });
+        const size_t before = session.project().findTrack(keysId)->midiClips.size();
+        session.setCountInBars(0);
+        std::string err;
+        expect(session.startRecording(err), "MIDI recording starts on the armed instrument track");
+        const int block = 256;
+        std::vector<float> silence(block), outL(block), outR(block);
+        const float* ins[2] = {silence.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        float livePeak = 0;
+        for (int b = 0; b < 48000 / block; ++b) {
+            if (b == 20) session.keyboardState().noteOn(1, 64, 0.8f);
+            if (b == 120) session.keyboardState().noteOff(1, 64, 0.f);
+            session.processForTesting(ins, 2, outs, 2, block);
+            if (b > 25 && b < 115)
+                for (float v : outL) livePeak = std::max(livePeak, std::abs(v));
+            juce::Thread::sleep(1);  // let the collector see real time pass, as a device would
+        }
+        expect(livePeak > 0.05f, "on-screen keyboard plays the armed instrument live");
+        auto res = session.stopRecording();
+        const auto* keys = session.project().findTrack(keysId);
+        bool noteOk = false;
+        if (keys->midiClips.size() == before + 1)
+            for (auto& n : keys->midiClips.back().notes) noteOk |= n.pitch == 64 && n.lengthTick > 0;
+        expect(res.newClips.size() == 1 && noteOk, "MIDI take committed with the played note");
+    }
+
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     expect(ynot::projectToJson(reopened) == ynot::projectToJson(session.project()), "save/reopen is lossless");
@@ -142,6 +175,8 @@ public:
             }
         }
         window_ = std::make_unique<MainWindow>(getApplicationName(), *session_, *host_);
+        if (args.contains("--show-keys"))
+            if (auto* mc = dynamic_cast<MainComponent*>(window_->getContentComponent())) mc->showKeyboard(true);
         if (args.contains("--screenshot")) {
             int i = args.indexOf("--screenshot");
             juce::File png(args[i + 1].unquoted());

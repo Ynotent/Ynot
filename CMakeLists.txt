@@ -31,6 +31,7 @@ add_library(ynot_core STATIC
     core/src/demo.cpp
     core/src/recorder.cpp
     core/src/edit.cpp
+    core/src/midi_recorder.cpp
 )
 target_include_directories(ynot_core PUBLIC core/include)
 if(MSVC)
@@ -75,6 +76,7 @@ if(YNOT_BUILD_TESTS)
         core/tests/test_platform.cpp
         core/tests/test_recorder.cpp
         core/tests/test_edit.cpp
+        core/tests/test_midi.cpp
     )
     target_link_libraries(ynot_core_tests PRIVATE ynot_core)
     add_test(NAME ynot_core_tests COMMAND ynot_core_tests)

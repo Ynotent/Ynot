@@ -14,6 +14,7 @@
 #include <atomic>
 #include <limits>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -94,6 +95,8 @@ struct EngineOptions {
     std::string isolateTrackPreFader;
     // Live input monitoring: track id -> input channel(s) (1 = mono, 2 = stereo pair).
     std::map<std::string, std::vector<int>> monitorInputs;
+    // Instrument tracks played live (armed for MIDI).
+    std::set<std::string> liveMidiTracks;
 };
 
 class Engine {
@@ -106,8 +109,11 @@ public:
     // Realtime-safe. Renders the next `frames` (<= maxBlock) into non-interleaved stereo.
     // `inputs` feed monitored tracks. With transportRunning=false, the position holds,
     // clips/MIDI don't play, but monitored input and effect tails still sound.
+    // `liveMidi` (offsets within this block, sorted) plays the instruments of tracks listed
+    // in EngineOptions::liveMidiTracks, e.g. from a MIDI controller or on-screen keyboard.
     void process(float* left, float* right, int frames, const float* const* inputs = nullptr,
-                 int numInputs = 0, bool transportRunning = true);
+                 int numInputs = 0, bool transportRunning = true, const MidiEvent* liveMidi = nullptr,
+                 int numLiveMidi = 0);
     void seek(int64_t frame);
     int64_t position() const { return pos_; }
     int maxBlock() const { return opts_.maxBlock; }

@@ -9,6 +9,10 @@
 
 namespace ynot {
 
+namespace {
+constexpr int kMaxLiveMidiPerBlock = 512;
+}
+
 double dbToGain(double db) { return db <= -144.0 ? 0.0 : std::pow(10.0, db / 20.0); }
 
 namespace {
@@ -180,6 +184,7 @@ struct Engine::TrackState {
     struct PluginAuto { PluginProcessor* proc; std::string param; const AutomationLane* lane; };
     std::vector<PluginAuto> pluginAutomation;
     std::vector<int> monitor;  // live input channels routed into this track
+    bool liveMidi = false;     // plays live MIDI input
 };
 
 Engine::Engine() = default;
@@ -213,6 +218,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
         if (!isolate) {
             auto mon = opts.monitorInputs.find(t.id);
             if (mon != opts.monitorInputs.end()) ts->monitor = mon->second;
+            ts->liveMidi = opts.liveMidiTracks.count(t.id) > 0;
         }
         ts->muted = !isolate && (t.mute || (anySolo && !t.solo));
         ts->gain = isolate ? 1.0 : dbToGain(t.gainDb);
@@ -287,7 +293,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
                              if (a.frame != b.frame) return a.frame < b.frame;
                              return !a.ev.noteOn && b.ev.noteOn;  // note-offs first
                          });
-        ts->blockEvents.reserve(ts->events.size());
+        ts->blockEvents.reserve(ts->events.size() + kMaxLiveMidiPerBlock);
 
         for (auto& p : t.inserts) {
             if (p.bypassed) continue;
@@ -328,7 +334,7 @@ void Engine::seek(int64_t frame) {
 }
 
 void Engine::process(float* left, float* right, int frames, const float* const* inputs, int numInputs,
-                     bool transportRunning) {
+                     bool transportRunning, const MidiEvent* liveMidi, int numLiveMidi) {
     frames = std::min(frames, opts_.maxBlock);
     std::fill(left, left + frames, 0.f);
     std::fill(right, right + frames, 0.f);
@@ -390,6 +396,17 @@ void Engine::process(float* left, float* right, int frames, const float* const* 
                 auto e = ts.events[ts.eventCursor++];
                 e.ev.frameOffset = static_cast<int>(std::max<int64_t>(0, e.frame - blockStart));
                 ts.blockEvents.push_back(e.ev);
+            }
+            if (ts.liveMidi && liveMidi) {
+                // Merge live events in offset order (insertion sort: no allocation).
+                for (int k = 0; k < numLiveMidi && k < kMaxLiveMidiPerBlock; ++k) {
+                    MidiEvent ev = liveMidi[k];
+                    ev.frameOffset = std::clamp(ev.frameOffset, 0, frames - 1);
+                    ts.blockEvents.push_back(ev);
+                    for (size_t j = ts.blockEvents.size() - 1;
+                         j > 0 && ts.blockEvents[j - 1].frameOffset > ts.blockEvents[j].frameOffset; --j)
+                        std::swap(ts.blockEvents[j - 1], ts.blockEvents[j]);
+                }
             }
             ts.instrument->process(l, r, frames, ts.blockEvents.data(),
                                    static_cast<int>(ts.blockEvents.size()));

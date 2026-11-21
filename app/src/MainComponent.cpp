@@ -29,20 +29,36 @@ bool canScanPlugins() {
 }  // namespace
 
 MainComponent::MainComponent(Session& session, JucePluginHost& host)
-    : session_(session), host_(host), theme_(Theme::load(true)), arrange_(session, host, theme_) {
+    : session_(session),
+      host_(host),
+      theme_(Theme::load(true)),
+      arrange_(session, host, theme_),
+      keyboard_(session.keyboardState(), juce::KeyboardComponentBase::horizontalKeyboard) {
     theme_.apply(lnf_);
     setLookAndFeel(&lnf_);
     setWantsKeyboardFocus(true);
 
-    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &undoButton_,
-                    &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_, &moreButton_})
+    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
+                    &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
+                    &moreButton_})
         addAndMakeVisible(*b);
+    addChildComponent(keyboard_);
+    keyboard_.setWantsKeyboardFocus(false);  // computer keys stay shortcuts (Space, S, Delete...)
+    keyboard_.setAvailableRange(24, 108);
+    keyboard_.setLowestVisibleKey(48);
+    keysButton_.setClickingTogglesState(true);
+    keysButton_.onClick = [this] {
+        keyboard_.setVisible(keysButton_.getToggleState());
+        resized();
+    };
     for (auto* c : std::initializer_list<juce::Component*>{&status_, &arrange_, &compatTitle_, &target_,
                                                            &prepareButton_, &compatSummary_, &compat_})
         addAndMakeVisible(*c);
 
     recordButton_.setColour(juce::TextButton::buttonOnColourId, theme_.record);
     for (auto* b : {&clickButton_, &countInButton_, &monitorButton_}) b->setClickingTogglesState(true);
+    keyboard_.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, theme_.primary);
+    keyboard_.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, theme_.primary.withAlpha(0.3f));
 
     playButton_.onClick = [this] { togglePlay(); };
     recordButton_.onClick = [this] { toggleRecording(); };
@@ -89,8 +105,15 @@ void MainComponent::resized() {
     auto r = getLocalBounds().reduced(12);
 
     // Toolbar. Phones keep transport + editing and move file/device actions into "More".
-    std::vector<juce::TextButton*> toolbar{&playButton_, &recordButton_, &clickButton_, &countInButton_,
-                                           &monitorButton_, &undoButton_, &redoButton_};
+    // Phones: Count-in and Monitor live in "More" as tick items to keep the toolbar to two rows.
+    std::vector<juce::TextButton*> toolbar{&playButton_, &recordButton_, &clickButton_};
+    countInButton_.setVisible(!compact());
+    monitorButton_.setVisible(!compact());
+    if (!compact()) {
+        toolbar.push_back(&countInButton_);
+        toolbar.push_back(&monitorButton_);
+    }
+    for (auto* b : {&keysButton_, &undoButton_, &redoButton_}) toolbar.push_back(b);
     for (auto* b : {&newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_}) {
         const bool show = !compact() && (b != &scanButton_ || canScanPlugins());
         b->setVisible(show);
@@ -137,6 +160,13 @@ void MainComponent::resized() {
         compatSummary_.setVisible(true);
         for (auto* c : std::initializer_list<juce::Component*>{&compatTitle_, &prepareButton_, &compat_}) c->setVisible(false);
     }
+    if (keyboard_.isVisible()) {
+        // Bigger keys for fingers than for a mouse.
+        const bool touch = layout_.minTouchTargetDp >= 44;
+        keyboard_.setKeyWidth(touch ? 40.f : 22.f);
+        keyboard_.setBounds(r.removeFromBottom(touch ? 140 : 90));
+        r.removeFromBottom(8);
+    }
     arrange_.setBounds(r);
     arrange_.setLayout(layout_);
 }
@@ -161,6 +191,11 @@ void MainComponent::timerCallback() {
     if (session_.isRecording()) s << "REC " << juce::String(session_.recordingSeconds(), 1) << " s   ";
     if (session_.monitoring() && dev) s << "monitor " << juce::String(session_.monitoringLatencyMs(), 1) << " ms   ";
     s << (dev ? dev->getTypeName() + ": " + dev->getName() : juce::String("no audio device"));
+    if (keyboard_.isVisible()) {
+        bool instrumentArmed = false;
+        for (auto& t : session_.project().tracks) instrumentArmed |= t.armed && t.kind == ynot::TrackKind::Instrument;
+        if (!instrumentArmed) s << "   Arm an instrument track (R) to play";
+    }
     status_.setText(s, juce::dontSendNotification);
     playButton_.setButtonText(session_.isPlaying() ? "Stop" : "Play");
 }
@@ -244,6 +279,15 @@ void MainComponent::showMoreMenu() {
     m.addItem("Open...", [this] { openProject(); });
     m.addItem("Save", [this] { session_.save(); });
     m.addSeparator();
+    m.addItem("Count-in (1 bar)", true, session_.countInBars() > 0, [this] {
+        session_.setCountInBars(session_.countInBars() > 0 ? 0 : 1);
+        countInButton_.setToggleState(session_.countInBars() > 0, juce::dontSendNotification);
+    });
+    m.addItem("Monitor input", true, session_.monitoring(), [this] {
+        session_.setMonitoring(!session_.monitoring());
+        monitorButton_.setToggleState(session_.monitoring(), juce::dontSendNotification);
+    });
+    m.addSeparator();
     m.addItem("Split clip at playhead", arrange_.hasSelection(), false, [this] { arrange_.splitSelectedAtPlayhead(); });
     m.addItem("Delete clip", arrange_.hasSelection(), false, [this] { arrange_.deleteSelected(); });
     m.addSeparator();
@@ -274,6 +318,8 @@ void MainComponent::toggleRecording() {
     if (session_.isRecording()) {
         auto result = session_.stopRecording();
         juce::String msg;
+        if (result.droppedMidiEvents > 0)
+            msg << juce::String(result.droppedMidiEvents) << " MIDI events were lost (take too dense).\n";
         if (result.droppedFrames > 0)
             msg << "The disk couldn't keep up: " << juce::String(result.droppedFrames)
                 << " samples were lost. Try a larger audio buffer or a faster drive.\n";

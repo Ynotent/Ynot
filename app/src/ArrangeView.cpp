@@ -49,7 +49,7 @@ public:
         track_ = t;
         stacked_ = stacked;
         const bool audio = t.kind == ynot::TrackKind::Audio;
-        arm_.setVisible(audio);  // MIDI recording for instrument tracks comes later in M1
+        arm_.setVisible(true);   // audio: records input; instrument: plays live MIDI and records it
         input_.setVisible(audio);
         arm_.setToggleState(t.armed, juce::dontSendNotification);
         input_.setButtonText(owner_.session_.inputLabel(t.id));

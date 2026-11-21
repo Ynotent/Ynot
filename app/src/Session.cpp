@@ -4,10 +4,18 @@
 
 namespace ynotapp {
 
-Session::Session(JucePluginHost& host) : host_(host) {}
+Session::Session(JucePluginHost& host) : host_(host) {
+    midiBuffer_.ensureSize(8192);
+    liveMidi_.resize(kMaxLiveMidi);
+    chunkMidi_.resize(kMaxLiveMidi);
+    collector_.reset(sampleRate_);
+    keyboardState_.addListener(&collector_);  // on-screen keyboard -> same path as hardware MIDI
+}
 
 Session::~Session() {
     if (recording_) stopRecording();
+    keyboardState_.removeListener(&collector_);
+    device_.manager().removeMidiInputDeviceCallback({}, this);
     stopAudio();
     delete active_.exchange(nullptr);
 }
@@ -101,6 +109,13 @@ void Session::rebuild() {
     if (monitoring_.load())
         for (const auto* t : project_.orderedTracks())
             if (t->armed && t->kind == ynot::TrackKind::Audio) opts.monitorInputs[t->id] = inputFor(t->id);
+    bool liveMidi = false;
+    for (const auto* t : project_.orderedTracks())
+        if (t->armed && t->kind == ynot::TrackKind::Instrument) {
+            opts.liveMidiTracks.insert(t->id);  // armed instruments play from MIDI input
+            liveMidi = true;
+        }
+    liveMidiActive_ = liveMidi;
     fresh->prepare(project_, *media_, host_, opts);
     fresh->seek(position_.load());
     fresh->setMetronome(metronomeOn_.load());
@@ -136,6 +151,12 @@ bool Session::startAudio(const std::string& deviceId) {
     blockSize_ = std::max(device_.currentBufferSize(), 64);
     scratchL_.assign(static_cast<size_t>(blockSize_), 0.f);
     scratchR_.assign(static_cast<size_t>(blockSize_), 0.f);
+    collector_.reset(sampleRate_);
+    // Listen to every MIDI input (USB/Bluetooth controllers, virtual ports).
+    for (auto& d : juce::MidiInput::getAvailableDevices())
+        device_.manager().setMidiInputDeviceEnabled(d.identifier, true);
+    device_.manager().removeMidiInputDeviceCallback({}, this);
+    device_.manager().addMidiInputDeviceCallback({}, this);
     rebuild();  // engine must match the device's actual rate and block size
     device_.start();
     return true;
@@ -195,11 +216,15 @@ bool Session::startRecording(std::string& error) {
     cfg.packageDir = dir_.getFullPathName().toStdString();
     for (const auto* t : project_.orderedTracks())
         if (t->armed && t->kind == ynot::TrackKind::Audio) cfg.targets.push_back({t->id, inputFor(t->id)});
-    if (cfg.targets.empty()) {
-        error = "Arm an audio track (R) to record.";
+    bool midiTargets = false;
+    for (const auto* t : project_.orderedTracks())
+        midiTargets |= t->armed && t->kind == ynot::TrackKind::Instrument;
+    const bool audioTargets = !cfg.targets.empty();
+    if (!audioTargets && !midiTargets) {
+        error = "Arm a track (R) to record: audio tracks record your input, instrument tracks record MIDI.";
         return false;
     }
-    if (numInputChannels() == 0) {
+    if (audioTargets && numInputChannels() == 0) {
         error = "The current audio device has no inputs enabled. Choose an input in Audio settings.";
         return false;
     }
@@ -209,15 +234,19 @@ bool Session::startRecording(std::string& error) {
     const int64_t countIn = ynot::tickToFrame(project_, int64_t(countInBars_) * project_.timeSigNumerator *
                                                             ynot::kTicksPerQuarter, sampleRate_);
     cfg.startAtFrame = recordStart;
-    if (!recorder_.start(cfg)) {
+    if (audioTargets && !recorder_.start(cfg)) {
         error = recorder_.error();
         return false;
     }
+    if (midiTargets) midiRecorder_.start(recordStart);
+    recordingAudio_ = audioTargets;
+    recordingMidi_ = midiTargets;
+    recordStart_ = recordStart;
     forcedClickUntil_ = countIn > 0 ? recordStart : std::numeric_limits<int64_t>::min();
     position_ = recordStart - countIn;
     rebuild();  // engine starts at the pre-roll position with the count-in click
-    draining_ = true;
-    drainThread_ = std::thread([this] {
+    draining_ = audioTargets;
+    if (audioTargets) drainThread_ = std::thread([this] {
         while (draining_.load()) {
             recorder_.drain();
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -238,7 +267,9 @@ Session::RecordResult Session::stopRecording() {
     while (inCallback_.load()) std::this_thread::yield();
     draining_ = false;
     if (drainThread_.joinable()) drainThread_.join();
-    auto takes = recorder_.finish();
+    const int64_t stopFrame = position_.load();
+    auto takes = recordingAudio_ ? recorder_.finish() : std::vector<ynot::RecordedTake>{};
+    auto midiEvents = recordingMidi_ ? midiRecorder_.finish() : std::vector<ynot::TimedMidiEvent>{};
     forcedClickUntil_ = std::numeric_limits<int64_t>::min();
     position_ = std::max<int64_t>(0, position_.load());
     result.droppedFrames = recorder_.droppedFrames();
@@ -246,13 +277,39 @@ Session::RecordResult Session::stopRecording() {
     const int latency = device_.manager().getCurrentAudioDevice() ? ynot::recordingOffsetFrames(device_) : 0;
     history_.record(project_);
     result.newClips = ynot::commitTakes(project_, dir_.getFullPathName().toStdString(), takes, latency);
+    if (recordingMidi_) {
+        // MIDI is timestamped at the engine frame it was played, so no latency offset applies.
+        if (auto clip = ynot::buildMidiClip(project_, midiEvents, recordStart_, stopFrame, sampleRate_)) {
+            for (auto& t : project_.tracks)
+                if (t.armed && t.kind == ynot::TrackKind::Instrument) {
+                    auto c = *clip;
+                    c.id = ynot::newId();  // each armed instrument gets its own copy
+                    t.midiClips.push_back(c);
+                    result.newClips.push_back(c.id);
+                }
+        }
+        result.droppedMidiEvents = midiRecorder_.droppedEvents();
+    }
+    recordingAudio_ = recordingMidi_ = false;
     save();
     rebuild();
     return result;
 }
 
 double Session::recordingSeconds() const {
-    return static_cast<double>(recorder_.recordedFrames()) / sampleRate_;
+    if (recordingAudio_) return static_cast<double>(recorder_.recordedFrames()) / sampleRate_;
+    return static_cast<double>(std::max<int64_t>(0, position_.load() - recordStart_)) / sampleRate_;
+}
+
+void Session::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& m) {
+    collector_.addMessageToQueue(m);  // MIDI thread -> lock-free hand-off to the audio thread
+}
+
+int Session::numMidiInputs() const {
+    int n = 0;
+    for (auto& d : juce::MidiInput::getAvailableDevices())
+        n += device_.manager().isMidiInputDeviceEnabled(d.identifier) ? 1 : 0;
+    return n;
 }
 
 void Session::setMonitoring(bool on) {
@@ -295,19 +352,38 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
         const int64_t seek = pendingSeek_.exchange(kNoSeek);
         if (seek != kNoSeek) engine->seek(seek);
     }
+    // Live MIDI for this block (hardware controllers + on-screen keyboard), sample-accurate.
+    midiBuffer_.clear();
+    collector_.removeNextBlockOfMessages(midiBuffer_, frames);
+    int numLive = 0;
+    for (const auto meta : midiBuffer_) {
+        const auto& m = meta.getMessage();
+        if (numLive >= kMaxLiveMidi) break;
+        if (m.isNoteOn()) liveMidi_[static_cast<size_t>(numLive++)] = {meta.samplePosition, true, m.getNoteNumber(), m.getVelocity()};
+        else if (m.isNoteOff()) liveMidi_[static_cast<size_t>(numLive++)] = {meta.samplePosition, false, m.getNoteNumber(), 0};
+    }
     // Capture before rendering: some drivers share input and output buffers.
-    if (engine && recording_.load()) recorder_.capture(ins, numIns, frames, engine->position());
+    if (engine && recordingAudio_.load()) recorder_.capture(ins, numIns, frames, engine->position());
+    if (engine && recordingMidi_.load()) midiRecorder_.capture(liveMidi_.data(), numLive, engine->position());
     float* l = numOuts > 0 ? outs[0] : scratchL_.data();
     float* r = numOuts > 1 ? outs[1] : scratchR_.data();
     const bool running = playing_.load();
-    if (engine && (running || monitoring_.load())) {
+    if (engine && (running || monitoring_.load() || liveMidiActive_.load())) {
         // Drivers may deliver blocks larger than requested; render in chunks.
         const float* chunkIns[16] = {};
         const int numChunkIns = std::min(numIns, 16);
         for (int done = 0; done < frames;) {
             int n = std::min(frames - done, engine->maxBlock());
             for (int c = 0; c < numChunkIns; ++c) chunkIns[c] = ins[c] ? ins[c] + done : nullptr;
-            engine->process(l + done, r + done, n, chunkIns, numChunkIns, running);
+            int numChunkMidi = 0;
+            for (int k = 0; k < numLive; ++k) {
+                const auto& ev = liveMidi_[static_cast<size_t>(k)];
+                if (ev.frameOffset >= done && ev.frameOffset < done + n) {
+                    chunkMidi_[static_cast<size_t>(numChunkMidi)] = ev;
+                    chunkMidi_[static_cast<size_t>(numChunkMidi++)].frameOffset -= done;
+                }
+            }
+            engine->process(l + done, r + done, n, chunkIns, numChunkIns, running, chunkMidi_.data(), numChunkMidi);
             done += n;
         }
         position_ = engine->position();

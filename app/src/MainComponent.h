@@ -23,6 +23,11 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
+    void showKeyboard(bool show) {
+        keysButton_.setToggleState(show, juce::dontSendNotification);
+        keyboard_.setVisible(show);
+        resized();
+    }
 
 private:
     void timerCallback() override;
@@ -50,12 +55,14 @@ private:
     // Transport and editing (always visible).
     juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
     juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
-    juce::TextButton undoButton_{"Undo"}, redoButton_{"Redo"};
+    juce::TextButton undoButton_{"Undo"}, redoButton_{"Redo"}, keysButton_{"Keys"};
     // File/device actions: toolbar on larger screens, "More" menu on phones.
     juce::TextButton newButton_{"New Demo"}, openButton_{"Open"}, saveButton_{"Save"};
     juce::TextButton audioButton_{"Audio"}, scanButton_{"Scan Plugins"}, moreButton_{"More"};
     juce::Label status_;
     ArrangeView arrange_;
+    // On-screen keyboard: plays armed instrument tracks exactly like a MIDI controller.
+    juce::MidiKeyboardComponent keyboard_;
 
     // Compatibility: side panel on larger screens, summary button + dialog on phones.
     juce::Label compatTitle_;

@@ -10,7 +10,7 @@ Based on CI run #1 (commit `0fea6cc`, 2026-11-21) on GitHub-hosted runners:
 
 | Platform | Status | Evidence |
 |---|---|---|
-| Windows | **native-shell-builds** | MSVC x64: core builds and 52/52 tests pass; the JUCE app (WASAPI + VST3 hosting) builds, its 9 adapter tests pass, and the headless smoke test passes (including recording through the audio callback). |
+| Windows | **native-shell-builds** | MSVC x64 (CI run #1): core builds and 52/52 tests pass; the JUCE app (WASAPI + VST3 hosting) builds, its 9 adapter tests pass, and the headless smoke test passes (including recording through the audio callback). |
 | Android | **core-compiles** | Core cross-compiles with the NDK for arm64-v8a and x86_64. No Android app shell yet (M5). |
 | macOS | **Planned** (M1 in progress) | CI jobs defined but **never ran**: GitHub cancelled them before a macOS runner was assigned (see below). |
 | iOS / iPadOS | **Planned** | Same as macOS: the iOS jobs need a macOS runner and never started. |
@@ -85,13 +85,28 @@ Done so far (built and tested on the Linux dev host only):
     file. Touch gestures (long-press menu, two-finger pinch and pan) are implemented but
     can't be exercised without a touch device, so they are untested until M4/M5 hardware runs.
 
+- **MIDI:**
+  - Armed instrument tracks play live from every MIDI input (USB, Bluetooth, virtual ports)
+    and from an on-screen keyboard, which matters on phones and tablets without a controller.
+  - Events are placed sample-accurately via `juce::MidiMessageCollector`.
+  - Recording an armed instrument track creates a MIDI clip. The core's `MidiTakeRecorder`
+    captures on the audio thread without allocating, skips the count-in, and closes notes
+    still held at stop. Re-struck notes and stray note-offs are handled, and overflow is
+    reported.
+  - Audio and MIDI tracks can record in the same take.
+  - On phones the keyboard has finger-sized keys, and Count-in/Monitor move into "More" so the
+    toolbar stays at two rows.
+
 Still to do:
 - Build and run on a real Mac; out-of-process plugin hosting and scanning; plugin editor windows.
 - Loop/cycle recording with take lanes; count-in length choice (currently 1 bar).
 - MIDI recording from controllers onto instrument tracks.
 - Recording latency calibration tool (loopback test). Driver-reported latency is often wrong
   by a few milliseconds.
-- MIDI note editor (piano roll); automation lane editing; clip gain/fades; multi-select;
+- MIDI: piano-roll editor; quantize on record (implemented in the core, no UI yet); sustain
+  pedal/CC/pitch-bend recording (notes only today); MIDI device hot-plug (devices are enabled
+  at audio start).
+- Automation lane editing; automation lane editing; clip gain/fades; multi-select;
   copy/paste.
 - Remove unreferenced media from the package after undo (orphaned takes are kept on disk today).
 - Features: record, edit, arrange, mix, freeze, open and save `.ynot`.

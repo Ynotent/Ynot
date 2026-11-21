@@ -19,7 +19,7 @@
 
 namespace ynotapp {
 
-class Session {
+class Session : private juce::MidiInputCallback {
 public:
     explicit Session(JucePluginHost& host);
     ~Session();
@@ -63,6 +63,7 @@ public:
     struct RecordResult {
         std::vector<std::string> newClips;
         int64_t droppedFrames = 0;
+        int64_t droppedMidiEvents = 0;
         std::string error;
     };
     RecordResult stopRecording();
@@ -81,6 +82,10 @@ public:
     void setCountInBars(int bars) { countInBars_ = std::clamp(bars, 0, 4); }
     int countInBars() const { return countInBars_; }
 
+    // MIDI: hardware inputs and the on-screen keyboard play armed instrument tracks.
+    juce::MidiKeyboardState& keyboardState() { return keyboardState_; }
+    int numMidiInputs() const;
+
     void setMetronome(bool on);
     bool metronome() const { return metronomeOn_.load(); }
 
@@ -98,6 +103,7 @@ public:
 
 private:
     void rebuild();
+    void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage&) override;
     void audioCallback(const float* const* ins, int numIns, float* const* outs, int numOuts, int frames);
 
     JucePluginHost& host_;
@@ -126,6 +132,16 @@ private:
     int countInBars_ = 0;
     int64_t forcedClickUntil_ = std::numeric_limits<int64_t>::min();
     ynot::History history_;
+
+    static constexpr int kMaxLiveMidi = 512;
+    juce::MidiMessageCollector collector_;
+    juce::MidiKeyboardState keyboardState_;
+    juce::MidiBuffer midiBuffer_;
+    std::vector<ynot::MidiEvent> liveMidi_, chunkMidi_;
+    std::atomic<bool> liveMidiActive_{false};
+    ynot::MidiTakeRecorder midiRecorder_;
+    std::atomic<bool> recordingAudio_{false}, recordingMidi_{false};
+    int64_t recordStart_ = 0;
     static constexpr int64_t kNoSeek = std::numeric_limits<int64_t>::min();
     std::atomic<int64_t> pendingSeek_{kNoSeek};
     int simulatedInputs_ = 0;

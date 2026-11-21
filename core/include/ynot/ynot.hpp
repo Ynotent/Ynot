@@ -10,6 +10,7 @@
 #include "ynot/engine.hpp"
 #include "ynot/json.hpp"
 #include "ynot/media.hpp"
+#include "ynot/midi_recorder.hpp"
 #include "ynot/model.hpp"
 #include "ynot/platform.hpp"
 #include "ynot/project_format.hpp"
