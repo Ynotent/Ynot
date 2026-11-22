@@ -191,6 +191,12 @@ Done so far (built and tested on the Linux dev host only):
     level against 8 fixture files.
   - Surround (5.1/7.1) is folded down to stereo: centre and surrounds at −3 dB, LFE left out.
 
+- **Downloadable Mac app:**
+  - The CI-built download (unsigned) first refused to open on macOS 14.3.1 ("not supported"):
+    it had no deployment target, so it required the runner's macOS 15. Now built for
+    macOS 12+, and CI fails if the binary requires more.
+  - Confirmed 2026-11-22: the download opens on the tester's M2 MacBook Pro (macOS 14.3.1).
+
 - **Sample rate:**
   - Toolbar menu (More on phones): 44.1, 48, 88.2, 96 and 192 kHz, plus any other rate the
     interface offers. Rates the device can't do are greyed out.
