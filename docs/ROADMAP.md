@@ -178,7 +178,9 @@ Done so far (built and tested on the Linux dev host only):
   - Formats by platform:
     - everywhere: WAV, AIFF, FLAC, Ogg, MP3;
     - macOS/iOS: + M4A/AAC/MP4/MOV/CAF (Core Audio);
-    - Windows: + WMA/WMV and MP4/AAC (Windows Media).
+    - Windows: + WMA/WMV/ASF and MP4/M4A/AAC (Media Foundation; finds the audio stream in
+      video files). JUCE's own Windows Media reader only checked a file's first stream, so
+      WMV files whose video comes first failed (found by CI on 2026-11-22).
   - Unsupported formats get a specific reason and a suggestion. Damaged files are refused,
     never imported as noise: only OS media decoders may sniff files with unusual
     extensions, so the MP3 decoder can't "decode" MP4/WMV containers into garbage.

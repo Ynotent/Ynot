@@ -282,7 +282,7 @@ static int runSmokeTest(const juce::File& dir) {
 #if JUCE_MAC || JUCE_IOS
             const juce::StringArray mustWork{"wav", "flac", "ogg", "mp3", "m4a", "mp4"}, mustFail{"wmv", "wma"};
 #elif JUCE_WINDOWS
-            const juce::StringArray mustWork{"wav", "flac", "ogg", "mp3", "wma", "wmv"}, mustFail{};
+            const juce::StringArray mustWork{"wav", "flac", "ogg", "mp3", "wma", "wmv", "m4a", "mp4"}, mustFail{};
 #else
             const juce::StringArray mustWork{"wav", "flac", "ogg", "mp3"}, mustFail{"mp4", "m4a", "wmv", "wma"};
 #endif

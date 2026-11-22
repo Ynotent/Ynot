@@ -1,7 +1,7 @@
 // Decodes audio files for import, using every decoder this platform offers:
 //   everywhere: WAV, AIFF, FLAC, Ogg Vorbis, MP3
 //   macOS/iOS:  + M4A/AAC/MP4/MOV/CAF (Core Audio — audio from video files too)
-//   Windows:    + WMA/WMV/MP4/M4A (Windows Media)
+//   Windows:    + WMA/WMV/ASF/MP4/M4A/AAC (Media Foundation — audio from video files too)
 // Decoded audio is stored in the project as lossless media, so a file imported on one
 // platform plays on all of them afterwards.
 #pragma once

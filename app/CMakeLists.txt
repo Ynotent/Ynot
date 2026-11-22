@@ -29,6 +29,11 @@ juce_add_gui_app(YnotApp
     DOCUMENT_EXTENSIONS ynot)
 
 target_sources(YnotApp PRIVATE src/Main.cpp ${YNOT_APP_SOURCES})
+if(WIN32)
+    # Media Foundation: WMV/WMA/MP4/M4A/AAC import (audio from video containers too).
+    target_sources(YnotApp PRIVATE src/MediaFoundationDecoder.cpp)
+    target_link_libraries(YnotApp PRIVATE mfplat mfreadwrite mfuuid ole32)
+endif()
 
 set(YNOT_JUCE_DEFS
     JUCE_WEB_BROWSER=0
@@ -65,6 +70,10 @@ target_link_libraries(YnotApp PRIVATE
 if(YNOT_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     juce_add_console_app(YnotAppTests PRODUCT_NAME "YnotAppTests")
     target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp src/JuceAudioDevice.cpp src/PluginSandbox.cpp src/AudioImporter.cpp)
+    if(WIN32)
+        target_sources(YnotAppTests PRIVATE src/MediaFoundationDecoder.cpp)
+        target_link_libraries(YnotAppTests PRIVATE mfplat mfreadwrite mfuuid ole32)
+    endif()
     target_compile_definitions(YnotAppTests PRIVATE ${YNOT_JUCE_DEFS}
         YNOT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     # Same JUCE modules as the app: plugin hosting on macOS needs frameworks (e.g. CoreAudioKit
