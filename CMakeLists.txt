@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
+# Oldest macOS the Mac app supports. Must be set before project(); without it the app
+# requires the macOS version of the machine that built it (CI: macOS 15), and Macs on
+# older systems refuse to open it. iOS builds pass their own target on the command line.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
+endif()
 project(Ynot VERSION 0.17.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
