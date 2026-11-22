@@ -292,8 +292,11 @@ static int runSmokeTest(const juce::File& dir) {
                 // 0.5 s of a 440 Hz tone at 44.1 kHz (lossy codecs may pad a little).
                 const bool good = d.ok && std::abs(d.audio.sampleRate - 44100.0) < 1.0 && d.audio.frames() >= 21000 &&
                                   d.audio.frames() <= 26000;
+                float peak = 0;
+                for (float v : d.audio.samples) peak = std::max(peak, std::abs(v));
                 std::cout << "  info import ." << ext << ": " << (good ? "ok via " + d.formatName : "FAILED " + d.error)
-                          << std::endl;
+                          << " (" << d.formatName << ", " << d.audio.sampleRate << " Hz, " << d.audio.channels
+                          << " ch, " << d.audio.frames() << " frames, peak " << peak << ")" << std::endl;
                 allOk &= good;
             }
             for (auto& ext : mustFail) {
