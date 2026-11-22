@@ -11,6 +11,7 @@
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <propidl.h>
 
 #include <cstring>
 
@@ -141,6 +142,22 @@ bool decodeWithMediaFoundation(const std::wstring& path, int64_t maxFrames, ynot
         error = "This file's audio track is empty.";
         return false;
     }
+    // Windows' WMA decoder drops the final partial codec frame (up to ~46 ms at 44.1 kHz:
+    // CI measured 20480 of 22050 frames). Pad with silence up to the file's stated duration
+    // so the clip keeps its true length on the timeline; never pad by more than 250 ms, in
+    // case a container's duration also counts other streams.
+    PROPVARIANT duration;
+    PropVariantInit(&duration);
+    if (SUCCEEDED(reader->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION,
+                                                   &duration)) &&
+        duration.vt == VT_UI8) {
+        const auto expected =
+            static_cast<int64_t>(static_cast<double>(duration.uhVal.QuadPart) * 1e-7 * static_cast<double>(rate) + 0.5);
+        const int64_t missing = expected - out.frames();
+        if (missing > 0 && missing <= static_cast<int64_t>(rate) / 4)
+            out.samples.resize(static_cast<size_t>(expected) * channels, 0.f);
+    }
+    PropVariantClear(&duration);
     return true;
 }
 
