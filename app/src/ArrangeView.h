@@ -17,6 +17,7 @@
 
 #include "Session.h"
 #include "Theme.h"
+#include "ynot/edit.hpp"
 #include "ynot/ui_layout.hpp"
 
 namespace ynotapp {
@@ -52,6 +53,15 @@ public:
     // Open a MIDI clip in the step sequencer (set by the main window).
     std::function<void(const std::string& trackId, const std::string& clipId)> onOpenPattern;
     bool hasSelection() const { return !selected_.clipId.empty(); }
+    // Mouse selection: drag a box, Shift/Cmd-click to add or remove; edits act on all of them.
+    int selectionCount() const { return static_cast<int>(selection_.size()); }
+    bool isSelected(const std::string& trackId, const std::string& clipId) const;
+    void selectAll();
+    void clearSelection();
+    bool copySelection();
+    bool cutSelection();
+    bool paste();  // at the playhead
+    bool duplicateSelection();
     // While the on-screen keyboard is open, letter keys play notes instead of editing.
     void setMusicalTyping(bool on) { musicalTyping_ = on; }
 
@@ -65,7 +75,12 @@ private:
     class TrackHeader;
     struct ClipKey {
         std::string trackId, clipId;
+        bool operator==(const ClipKey& o) const { return trackId == o.trackId && clipId == o.clipId; }
     };
+    void selectOnly(const ClipKey& k);
+    void toggleSelected(const ClipKey& k);
+    void setSelection(const std::vector<ynot::ClipRef>& refs);
+    std::vector<ynot::ClipRef> selectionRefs() const;
 
     void timerCallback() override;
 
@@ -87,7 +102,9 @@ private:
     int laneHeight_ = 64;
     double pixelsPerBeat_ = 60;
     double scrollBeat_ = 0;
-    ClipKey selected_;
+    ClipKey selected_;               // the primary (last clicked) clip
+    std::vector<ClipKey> selection_; // every selected clip, including the primary
+    std::vector<ynot::ClipboardItem> clipboard_;
     bool musicalTyping_ = false;
 
     std::unique_ptr<Ruler> ruler_;

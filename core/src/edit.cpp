@@ -200,6 +200,105 @@ std::string importAudioClip(Project& p, const std::string& packageDir, const std
     return id;
 }
 
+std::vector<ClipboardItem> copyClips(const Project& p, const std::vector<ClipRef>& clips) {
+    std::vector<ClipboardItem> out;
+    for (const auto& r : clips) {
+        const Track* t = p.findTrack(r.trackId);
+        if (!t) continue;
+        for (const auto& c : t->audioClips)
+            if (c.id == r.clipId) out.push_back({r.trackId, c, std::nullopt});
+        for (const auto& c : t->midiClips)
+            if (c.id == r.clipId) out.push_back({r.trackId, std::nullopt, c});
+    }
+    return out;
+}
+
+namespace {
+int64_t startOf(const ClipboardItem& i) { return i.audio ? i.audio->startTick : i.midi->startTick; }
+int64_t endOf(const ClipboardItem& i) {
+    return i.audio ? i.audio->startTick + i.audio->lengthTick : i.midi->startTick + i.midi->lengthTick;
+}
+
+// Places clips (keeping their ids) at start + delta. Audio covers what it lands on.
+std::vector<ClipRef> place(Project& p, std::vector<ClipboardItem> items, int64_t delta, bool newIds) {
+    std::vector<ClipRef> out;
+    // Earliest first, so a later clip from the same set wins where two overlap after the move.
+    std::stable_sort(items.begin(), items.end(),
+                     [](const ClipboardItem& a, const ClipboardItem& b) { return startOf(a) < startOf(b); });
+    for (auto& i : items) {
+        Track* t = p.findTrack(i.trackId);
+        if (!t) continue;
+        if (i.audio && t->kind == TrackKind::Audio) {
+            AudioClip c = *i.audio;
+            if (newIds) c.id = newId();
+            c.startTick = std::max<int64_t>(0, c.startTick + delta);
+            out.push_back({t->id, c.id});
+            placeClipReplacing(p, *t, std::move(c));
+        } else if (i.midi && t->kind == TrackKind::Instrument) {
+            MidiClip c = *i.midi;
+            if (newIds) c.id = newId();
+            c.startTick = std::max<int64_t>(0, c.startTick + delta);
+            out.push_back({t->id, c.id});
+            t->midiClips.push_back(std::move(c));
+            std::sort(t->midiClips.begin(), t->midiClips.end(),
+                      [](const MidiClip& a, const MidiClip& b) { return a.startTick < b.startTick; });
+        }
+    }
+    return out;
+}
+}  // namespace
+
+bool deleteClips(Project& p, const std::vector<ClipRef>& clips) {
+    bool any = false;
+    for (const auto& r : clips) any |= deleteClip(p, r.trackId, r.clipId);
+    return any;
+}
+
+bool moveClips(Project& p, const std::vector<ClipRef>& clips, int64_t deltaTicks) {
+    auto items = copyClips(p, clips);
+    if (items.empty()) return false;
+    int64_t earliest = startOf(items.front());
+    for (const auto& i : items) earliest = std::min(earliest, startOf(i));
+    deltaTicks = std::max(deltaTicks, -earliest);  // keep everything at or after the song start
+    if (deltaTicks == 0) return true;
+    deleteClips(p, clips);  // lift them all first, so they don't cut each other
+    place(p, std::move(items), deltaTicks, false);
+    return true;
+}
+
+std::vector<ClipRef> pasteClips(Project& p, const std::vector<ClipboardItem>& items, int64_t atTick) {
+    if (items.empty()) return {};
+    int64_t earliest = startOf(items.front());
+    for (const auto& i : items) earliest = std::min(earliest, startOf(i));
+    return place(p, items, std::max<int64_t>(0, atTick) - earliest, true);
+}
+
+std::vector<ClipRef> duplicateClips(Project& p, const std::vector<ClipRef>& clips) {
+    auto items = copyClips(p, clips);
+    if (items.empty()) return {};
+    int64_t earliest = startOf(items.front()), latest = endOf(items.front());
+    for (const auto& i : items) {
+        earliest = std::min(earliest, startOf(i));
+        latest = std::max(latest, endOf(i));
+    }
+    return place(p, std::move(items), latest - earliest, true);
+}
+
+std::vector<ClipRef> clipsInRange(const Project& p, const std::vector<std::string>& trackIds, int64_t fromTick,
+                                  int64_t toTick) {
+    std::vector<ClipRef> out;
+    if (toTick < fromTick) std::swap(fromTick, toTick);
+    for (const auto& id : trackIds) {
+        const Track* t = p.findTrack(id);
+        if (!t) continue;
+        for (const auto& c : t->audioClips)
+            if (c.startTick < toTick && c.startTick + c.lengthTick > fromTick) out.push_back({id, c.id});
+        for (const auto& c : t->midiClips)
+            if (c.startTick < toTick && c.startTick + c.lengthTick > fromTick) out.push_back({id, c.id});
+    }
+    return out;
+}
+
 bool selectTake(Project& p, const std::string& trackId, const std::string& clipId, int index) {
     Track* t = p.findTrack(trackId);
     AudioClip* c = t ? findAudio(*t, clipId) : nullptr;

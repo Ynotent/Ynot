@@ -381,12 +381,34 @@ public:
             }
             g.restoreState();
         }
-        // Drag ghost.
-        if (drag_.mode != DragMode::None && drag_.mode != DragMode::Pinch) {
+        // Drag ghost (every selected clip when several move together).
+        if (drag_.mode == DragMode::Move && drag_.moved && groupMove()) {
+            g.setColour(th.text.withAlpha(0.9f));
+            const int64_t delta = groupDelta();
+            for (const auto& k : owner_.selection_)
+                if (auto span = ynot::findClip(owner_.session_.project(), k.trackId, k.clipId))
+                    for (auto& r : rows())
+                        if (r.track->id == k.trackId) {
+                            const int x0 = static_cast<int>(owner_.tickToX(std::max<int64_t>(0, span->startTick + delta)));
+                            const int x1 = static_cast<int>(owner_.tickToX(span->startTick + delta + span->lengthTick));
+                            g.drawRoundedRectangle(juce::Rectangle<int>(x0, r.lane.getY() + 3, std::max(2, x1 - x0),
+                                                                        r.lane.getHeight() - 6)
+                                                       .toFloat()
+                                                       .reduced(1.f),
+                                                   4.f, 2.f);
+                        }
+        } else if (drag_.mode != DragMode::None && drag_.mode != DragMode::Pinch && drag_.mode != DragMode::Marquee) {
             if (auto g2 = ghostRect()) {
                 g.setColour(th.text.withAlpha(0.9f));
                 g.drawRoundedRectangle(g2->toFloat().reduced(1.f), 4.f, 2.f);
             }
+        }
+        if (drag_.mode == DragMode::Marquee && drag_.moved) {  // the selection box
+            const auto box = juce::Rectangle<float>(drag_.start, drag_.current);
+            g.setColour(th.primary.withAlpha(0.15f));
+            g.fillRect(box);
+            g.setColour(th.primary.withAlpha(0.8f));
+            g.drawRect(box, 1.f);
         }
         if (dropHint_) {  // where a dropped file will start
             const float dx = static_cast<float>(owner_.tickToX(
@@ -412,14 +434,32 @@ public:
         }
         auto hit = clipAt(e.position);
         drag_ = {};
-        drag_.start = e.position;
+        drag_.start = drag_.current = e.position;
+        const bool addKey = (e.mods.isShiftDown() || e.mods.isCommandDown()) && !e.mods.isPopupMenu();
         if (!hit) {
-            owner_.selected_ = {};
-            if (laneAt(e.position)) owner_.session_.seekToTick(ynot::snapTick(owner_.xToTick(e.x), owner_.gridTicks()));
+            // Empty space: a click moves the playhead; a drag draws a selection box.
+            if (e.mods.isPopupMenu() || e.source.isTouch()) {
+                owner_.clearSelection();
+                if (laneAt(e.position)) owner_.session_.seekToTick(ynot::snapTick(owner_.xToTick(e.x), owner_.gridTicks()));
+                owner_.repaint();
+                return;
+            }
+            drag_.mode = DragMode::Marquee;
+            drag_.additive = addKey;
+            if (addKey) drag_.before = owner_.selectionRefs();
+            owner_.grabKeyboardFocus();
+            return;
+        }
+        const ClipKey key{hit->trackId, hit->clipId};
+        if (addKey) {  // Shift/Cmd-click: add to or remove from the selection
+            owner_.toggleSelected(key);
+            owner_.grabKeyboardFocus();
             owner_.repaint();
             return;
         }
-        owner_.selected_ = {hit->trackId, hit->clipId};
+        // Clicking a clip that's part of a bigger selection keeps it, so they can move together.
+        if (owner_.isSelected(key.trackId, key.clipId)) owner_.selected_ = key;
+        else owner_.selectOnly(key);
         drag_.clip = *hit;
         drag_.mode = hit->zone;
         // Option/Alt + drag the right edge = time stretch (audio clips).
@@ -445,6 +485,7 @@ public:
         if (drag_.mode == DragMode::None) return;
         drag_.current = e.position;
         drag_.moved = drag_.moved || e.getDistanceFromDragStart() > 3;
+        if (drag_.mode == DragMode::Marquee && drag_.moved) updateMarquee();
         repaint();
     }
 
@@ -455,7 +496,13 @@ public:
             if (touches_.empty()) drag_ = {};
             return;
         }
-        if (drag_.mode == DragMode::Stretch && drag_.moved) commitStretchDrag();
+        if (drag_.mode == DragMode::Marquee) {
+            if (!drag_.moved) {  // a plain click on empty space
+                if (!drag_.additive) owner_.clearSelection();
+                if (laneAt(drag_.start))
+                    owner_.session_.seekToTick(ynot::snapTick(owner_.xToTick(drag_.start.x), owner_.gridTicks()));
+            }
+        } else if (drag_.mode == DragMode::Stretch && drag_.moved) commitStretchDrag();
         else if (drag_.mode != DragMode::None && drag_.moved) commitDrag();
         drag_ = {};
         repaint();
@@ -525,7 +572,7 @@ public:
     }
 
 private:
-    enum class DragMode { None, Move, TrimStart, TrimEnd, Stretch, Pinch };
+    enum class DragMode { None, Move, TrimStart, TrimEnd, Stretch, Pinch, Marquee };
     struct Hit {
         std::string trackId, clipId;
         DragMode zone;
@@ -537,6 +584,8 @@ private:
         Hit clip;
         juce::Point<float> start, current;
         bool moved = false;
+        bool additive = false;                           // marquee with Shift/Cmd: adds to the selection
+        std::vector<ynot::ClipRef> before;               // selection when an additive marquee began
         double pinchStartDist = 0, pinchStartPpb = 0, pinchStartScroll = 0, pinchAnchorX = 0;
     };
 
@@ -549,7 +598,7 @@ private:
         if (x1 < lane.getX() || x0 > lane.getRight()) return;
         juce::Rectangle<float> r(x0, static_cast<float>(lane.getY() + 3), std::max(2.f, x1 - x0),
                                  static_cast<float>(lane.getHeight() - 6));
-        const bool selected = owner_.selected_.clipId == clipId && owner_.selected_.trackId == t.id;
+        const bool selected = owner_.isSelected(t.id, clipId);
         const bool dragging = drag_.mode != DragMode::None && drag_.moved && drag_.clip.clipId == clipId;
         g.setColour(color.withAlpha(dragging ? 0.25f : 0.35f));
         g.fillRoundedRectangle(r, 4.f);
@@ -666,7 +715,8 @@ private:
             case DragMode::TrimEnd: e = std::max(ynot::snapTick(e + dragDeltaTicks(), grid), s + ynot::kMinClipTicks); break;
             case DragMode::Stretch: e = s + stretchedLength(); break;
             case DragMode::None:
-            case DragMode::Pinch: return std::nullopt;
+            case DragMode::Pinch:
+            case DragMode::Marquee: return std::nullopt;
         }
         for (auto& r : rows())
             if (r.track->id == track) {
@@ -677,10 +727,38 @@ private:
         return std::nullopt;
     }
 
+    // Several clips selected and one of them dragged: they all move by the same amount.
+    bool groupMove() const {
+        return owner_.selection_.size() > 1 && owner_.isSelected(drag_.clip.trackId, drag_.clip.clipId);
+    }
+    int64_t groupDelta() const {
+        const auto c = drag_.clip;
+        return std::max<int64_t>(0, ynot::snapTick(c.startTick + dragDeltaTicks(), owner_.gridTicks())) - c.startTick;
+    }
+    // Selection box: every clip it touches, on the tracks it spans.
+    void updateMarquee() {
+        const auto box = juce::Rectangle<float>(drag_.start, drag_.current);
+        std::vector<std::string> tracks;
+        for (auto& r : rows())
+            if (r.lane.toFloat().intersects(box)) tracks.push_back(r.track->id);
+        auto refs = ynot::clipsInRange(owner_.session_.project(), tracks, owner_.xToTick(box.getX()),
+                                       owner_.xToTick(box.getRight()));
+        if (drag_.additive)
+            for (const auto& b : drag_.before)
+                if (std::find(refs.begin(), refs.end(), b) == refs.end()) refs.push_back(b);
+        owner_.setSelection(refs);
+    }
+
     void commitDrag() {
         const auto c = drag_.clip;
         const int64_t grid = owner_.gridTicks();
         const int64_t delta = dragDeltaTicks();
+        if (drag_.mode == DragMode::Move && groupMove()) {
+            const int64_t d = groupDelta();
+            const auto refs = owner_.selectionRefs();
+            owner_.session_.edit([&](ynot::Project& p) { ynot::moveClips(p, refs, d); });
+            return;
+        }
         const std::string target = dropTrack();
         owner_.session_.edit([&](ynot::Project& p) {
             switch (drag_.mode) {
@@ -695,7 +773,8 @@ private:
                     break;
                 case DragMode::Stretch:
                 case DragMode::None:
-                case DragMode::Pinch: break;
+                case DragMode::Pinch:
+                case DragMode::Marquee: break;
             }
         });
         if (drag_.mode == DragMode::Move) owner_.selected_.trackId = target;
@@ -767,7 +846,11 @@ private:
             owner_.repaint();
         });
         m.addSeparator();
-        m.addItem("Delete", [this] { owner_.deleteSelected(); });
+        const int n = owner_.selectionCount();
+        const juce::String what = n > 1 ? juce::String(n) + " clips" : juce::String("clip");
+        m.addItem("Copy " + what + "  (Cmd+C)", [this] { owner_.copySelection(); });
+        m.addItem("Duplicate " + what + "  (Cmd+D)", [this] { owner_.duplicateSelection(); });
+        m.addItem("Delete " + what, [this] { owner_.deleteSelected(); });
         m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
             juce::Rectangle<int>(1, 1).withPosition(localPointToGlobal(at.toInt()))));
     }
@@ -906,6 +989,13 @@ void ArrangeView::refresh() {
         it = session_.project().findMedia(it->first) ? std::next(it) : peaks_.erase(it);
     if (!session_.hasProject()) selected_ = {};
     else if (!ynot::findClip(session_.project(), selected_.trackId, selected_.clipId)) selected_ = {};
+    selection_.erase(std::remove_if(selection_.begin(), selection_.end(),
+                                    [this](const ClipKey& k) {
+                                        return !session_.hasProject() ||
+                                               !ynot::findClip(session_.project(), k.trackId, k.clipId);
+                                    }),
+                     selection_.end());
+    if (selected_.clipId.empty() && !selection_.empty()) selected_ = selection_.back();
     resized();
     repaint();
 }
@@ -1183,14 +1273,100 @@ bool ArrangeView::selectedIsMidi() const {
 
 bool ArrangeView::deleteSelected() {
     if (!hasSelection()) return false;
-    auto sel = selected_;
-    selected_ = {};
-    session_.edit([&](ynot::Project& p) { ynot::deleteClip(p, sel.trackId, sel.clipId); });
+    const auto refs = selectionRefs();
+    clearSelection();
+    session_.edit([&](ynot::Project& p) { ynot::deleteClips(p, refs); });
     return true;
+}
+
+bool ArrangeView::isSelected(const std::string& trackId, const std::string& clipId) const {
+    return std::find(selection_.begin(), selection_.end(), ClipKey{trackId, clipId}) != selection_.end();
+}
+
+void ArrangeView::selectOnly(const ClipKey& k) {
+    selection_ = {k};
+    selected_ = k;
+    repaint();
+}
+
+void ArrangeView::toggleSelected(const ClipKey& k) {
+    auto it = std::find(selection_.begin(), selection_.end(), k);
+    if (it != selection_.end()) {
+        selection_.erase(it);
+        selected_ = selection_.empty() ? ClipKey{} : selection_.back();
+    } else {
+        selection_.push_back(k);
+        selected_ = k;
+    }
+    repaint();
+}
+
+void ArrangeView::setSelection(const std::vector<ynot::ClipRef>& refs) {
+    selection_.clear();
+    for (const auto& r : refs) selection_.push_back({r.trackId, r.clipId});
+    selected_ = selection_.empty() ? ClipKey{} : selection_.back();
+    repaint();
+}
+
+std::vector<ynot::ClipRef> ArrangeView::selectionRefs() const {
+    std::vector<ynot::ClipRef> out;
+    for (const auto& k : selection_) out.push_back({k.trackId, k.clipId});
+    return out;
+}
+
+void ArrangeView::selectAll() {
+    std::vector<ynot::ClipRef> all;
+    if (session_.hasProject())
+        for (const auto& t : session_.project().tracks) {
+            for (const auto& c : t.audioClips) all.push_back({t.id, c.id});
+            for (const auto& c : t.midiClips) all.push_back({t.id, c.id});
+        }
+    setSelection(all);
+}
+
+void ArrangeView::clearSelection() {
+    selection_.clear();
+    selected_ = {};
+    repaint();
+}
+
+bool ArrangeView::copySelection() {
+    if (selection_.empty()) return false;
+    clipboard_ = ynot::copyClips(session_.project(), selectionRefs());
+    return !clipboard_.empty();
+}
+
+bool ArrangeView::cutSelection() {
+    return copySelection() && deleteSelected();
+}
+
+bool ArrangeView::paste() {
+    if (clipboard_.empty()) return false;
+    std::vector<ynot::ClipRef> pasted;
+    const int64_t at = session_.positionTick();
+    session_.edit([&](ynot::Project& p) { pasted = ynot::pasteClips(p, clipboard_, at); });
+    setSelection(pasted);
+    return !pasted.empty();
+}
+
+bool ArrangeView::duplicateSelection() {
+    if (selection_.empty()) return false;
+    std::vector<ynot::ClipRef> copies;
+    const auto refs = selectionRefs();
+    session_.edit([&](ynot::Project& p) { copies = ynot::duplicateClips(p, refs); });
+    setSelection(copies);
+    return !copies.empty();
 }
 
 bool ArrangeView::keyPressed(const juce::KeyPress& key) {
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) return deleteSelected();
+    const auto cmd = juce::ModifierKeys::commandModifier;
+    if (key == juce::KeyPress('a', cmd, 0)) return selectAll(), true;
+    if (key == juce::KeyPress('c', cmd, 0)) return copySelection(), true;
+    if (key == juce::KeyPress('x', cmd, 0)) return cutSelection(), true;
+    if (key == juce::KeyPress('v', cmd, 0)) return paste(), true;
+    if (key == juce::KeyPress('d', cmd, 0)) return duplicateSelection(), true;
+    if (key == juce::KeyPress::escapeKey) return clearSelection(), true;
     if (!musicalTyping_ && (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S')) {
         if (!key.getModifiers().isCommandDown()) return splitSelectedAtPlayhead();
     }

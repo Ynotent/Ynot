@@ -64,6 +64,32 @@ bool moveInsert(Project& p, const std::string& trackId, const std::string& plugi
 std::string importAudioClip(Project& p, const std::string& packageDir, const std::string& trackId,
                             const AudioBuffer& audio, int64_t startTick);
 
+// Several clips at once (mouse selection). A clip is identified by (trackId, clipId).
+struct ClipRef {
+    std::string trackId, clipId;
+    bool operator==(const ClipRef& o) const { return trackId == o.trackId && clipId == o.clipId; }
+};
+// Moves every listed clip by the same number of ticks (they keep their spacing); a move that
+// would push a clip before the song start is limited so the earliest clip lands at 0.
+// Audio clips cover what they land on, as when moving one clip.
+bool moveClips(Project& p, const std::vector<ClipRef>& clips, int64_t deltaTicks);
+bool deleteClips(Project& p, const std::vector<ClipRef>& clips);
+// Clipboard: copies of clips, remembered with their tracks.
+struct ClipboardItem {
+    std::string trackId;
+    std::optional<AudioClip> audio;
+    std::optional<MidiClip> midi;
+};
+std::vector<ClipboardItem> copyClips(const Project& p, const std::vector<ClipRef>& clips);
+// Pastes so the earliest copied clip starts at `atTick`, on the same tracks (skipping tracks that
+// no longer exist). Returns the new clips.
+std::vector<ClipRef> pasteClips(Project& p, const std::vector<ClipboardItem>& items, int64_t atTick);
+// Copies the clips to right after the last of them. Returns the new clips.
+std::vector<ClipRef> duplicateClips(Project& p, const std::vector<ClipRef>& clips);
+// Every clip whose span overlaps [fromTick, toTick) on the listed tracks.
+std::vector<ClipRef> clipsInRange(const Project& p, const std::vector<std::string>& trackIds, int64_t fromTick,
+                                  int64_t toTick);
+
 // Cycle-recording takes: make take `index` the one that plays (keeps the clip's trims).
 bool selectTake(Project& p, const std::string& trackId, const std::string& clipId, int index);
 

@@ -262,3 +262,44 @@ TEST("import: decoded audio becomes a clip that plays at its own sample rate") {
     Project q = loadProjectPackage(dir);
     CHECK(loadMedia(*q.findMedia(c.mediaId), dir).frames() == 22050);
 }
+
+TEST("selection: move, copy/paste, duplicate and delete several clips together") {
+    Project p = editProject();  // a: audio c1 [0, 4 beats); k: MIDI mc [0, 4 beats)
+    p.findTrack("b")->audioClips = {{"c2", "m", 4 * kBeat, 2 * kBeat, 0, 0.0, {}, 0, 1.0, {}, {}, 0}};
+    const std::vector<ClipRef> sel = {{"a", "c1"}, {"k", "mc"}, {"b", "c2"}};
+
+    // Move all by 2 beats: spacing kept.
+    CHECK(moveClips(p, sel, 2 * kBeat));
+    CHECK_EQ(p.findTrack("a")->audioClips.at(0).startTick, 2 * kBeat);
+    CHECK_EQ(p.findTrack("k")->midiClips.at(0).startTick, 2 * kBeat);
+    CHECK_EQ(p.findTrack("b")->audioClips.at(0).startTick, 6 * kBeat);
+    // A move past the song start stops with the earliest clip at 0.
+    CHECK(moveClips(p, sel, -10 * kBeat));
+    CHECK_EQ(p.findTrack("a")->audioClips.at(0).startTick, int64_t(0));
+    CHECK_EQ(p.findTrack("b")->audioClips.at(0).startTick, 4 * kBeat);
+
+    // Copy + paste at beat 8: new clips, same tracks, same spacing.
+    auto clip = copyClips(p, sel);
+    CHECK_EQ(clip.size(), size_t(3));
+    auto pasted = pasteClips(p, clip, 8 * kBeat);
+    CHECK_EQ(pasted.size(), size_t(3));
+    CHECK_EQ(p.findTrack("a")->audioClips.size(), size_t(2));
+    CHECK_EQ(p.findTrack("a")->audioClips.at(1).startTick, 8 * kBeat);
+    CHECK_EQ(p.findTrack("b")->audioClips.at(1).startTick, 12 * kBeat);
+    CHECK(p.findTrack("a")->audioClips.at(1).id != "c1");
+    CHECK_EQ(p.findTrack("k")->midiClips.at(1).notes.size(), size_t(2));
+
+    // Duplicate: right after the selection's end (beat 6 -> copies start at beat 6).
+    auto dup = duplicateClips(p, {{"a", "c1"}, {"b", "c2"}});
+    CHECK_EQ(dup.size(), size_t(2));
+    bool found = false;
+    for (auto& c : p.findTrack("a")->audioClips) found |= c.startTick == 6 * kBeat;
+    CHECK(found);
+
+    // Range query (the box you drag) and deleting a selection.
+    auto inBox = clipsInRange(p, {"a", "k"}, 0, kBeat);
+    CHECK_EQ(inBox.size(), size_t(2));
+    CHECK(deleteClips(p, inBox));
+    CHECK(clipsInRange(p, {"a", "k"}, 0, kBeat).empty());
+    CHECK(pasteClips(p, {}, 0).empty());
+}
