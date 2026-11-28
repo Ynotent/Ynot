@@ -197,7 +197,9 @@ public:
         if (autoLabel_.isNotEmpty()) {
             g.setColour(theme_.accent);
             g.setFont(juce::FontOptions(theme_.bodySize - 3.f, juce::Font::bold));
-            g.drawText(autoLabel_, fader_.getBounds().withHeight(14).translated(0, -14), juce::Justification::centred);
+            // Under the fader's value, clear of the pan readout.
+            g.drawText(autoLabel_, fader_.getBounds().removeFromBottom(36).withHeight(12).translated(0, -2),
+                       juce::Justification::centred);
         }
     }
 
