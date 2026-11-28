@@ -642,6 +642,25 @@ static int runSmokeTest(const juce::File& dir) {
         session.seekToTick(0);
     }
 
+    {   // Save As copies the song (with its recordings) and continues in the copy; edits mark it unsaved.
+        session.edit([&](ynot::Project& p) { p.tracks[0].name = "Lead vocal"; });
+        const bool markedEdited = session.isModified();
+        const auto copyDir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("ynot-saveas-test.ynot");
+        copyDir.deleteRecursively();
+        const auto original = session.packageDir();
+        const auto err = session.saveAs(copyDir);
+        auto copy = ynot::loadProjectPackage(copyDir.getFullPathName().toStdString());
+        bool mediaCopied = !copy.media.empty();
+        for (const auto& m : copy.media) mediaCopied &= copyDir.getChildFile(m.fileName).existsAsFile();
+        expect(markedEdited && err.isEmpty() && !session.isModified() && session.packageDir() == copyDir &&
+                   copy.tracks[0].name == "Lead vocal" && copy.name == "ynot-saveas-test" && mediaCopied &&
+                   Session::recentProjects().contains(copyDir.getFullPathName()),
+               "Save As copies the song and its recordings, continues there and lists it under recent songs");
+        expect(session.saveAs(original).isNotEmpty(), "Save As refuses to overwrite an existing song");
+        session.open(original);  // carry on with the original for the rest of the test
+        copyDir.deleteRecursively();
+    }
+
     session.save();
     auto reopened = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     expect(ynot::projectToJson(reopened) == ynot::projectToJson(session.project()), "save/reopen is lossless");

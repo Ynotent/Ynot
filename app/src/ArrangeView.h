@@ -50,6 +50,10 @@ public:
     // Audio import hooks (set by the main window).
     std::function<void(const juce::Array<juce::File>&, const std::string& trackId, int64_t startTick)> onImportFiles;
     std::function<void(const std::string& trackId)> onImportRequest;
+    // The track shown in the inspector: the last clicked track or clip (else the first track).
+    std::string focusedTrackId() const;
+    void focusTrack(const std::string& trackId);
+    std::function<void(const std::string& trackId)> onFocusTrackChanged;
     // Open a MIDI clip in the step sequencer (set by the main window).
     std::function<void(const std::string& trackId, const std::string& clipId)> onOpenPattern;
     bool hasSelection() const { return !selected_.clipId.empty(); }
@@ -106,6 +110,7 @@ private:
     std::vector<ClipKey> selection_; // every selected clip, including the primary
     std::vector<ynot::ClipboardItem> clipboard_;
     bool musicalTyping_ = false;
+    std::string focusTrack_;
 
     std::unique_ptr<Ruler> ruler_;
     std::unique_ptr<Lanes> lanes_;

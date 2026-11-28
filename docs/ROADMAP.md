@@ -210,7 +210,16 @@ Done so far (built and tested on the Linux dev host only):
   audition, Play pattern. Patterns are MIDI clips, so they export and drive any drum plugin.
 - **Ynot Tune:** built-in pitch correction (key, scale, retune speed, humanize, flex-tune,
   mix) with plugin delay compensation in the engine (sample-exact, tested).
-- Verified for all of the above: core unit tests (101) and app smoke tests on Linux, plus
+- **Selection:** drag a box over clips, Shift/Cmd-click, move/copy/cut/paste/duplicate/delete
+  several clips together (Cmd+A/C/X/V/D, Esc).
+- **Live recording waveform:** the input's waveform draws inside the record region as it records.
+- **File menu and studio layout:** menu bar (system menu bar on macOS), File: New Song, Open,
+  Open Recent, Save, Save As (copies the song with its recordings), Export, Import; Edit,
+  Track, Transport and View menus with shortcuts; transport bar with icons and a bars|beats /
+  time counter; Save/Saved indicator and "(edited)" in the window title; track inspector on
+  the left; device-compatibility panel moved to View (summary chip in the transport bar).
+  Original Ynot styling; not a copy of Pro Tools' or Logic's look.
+- Verified for all of the above: core unit tests (102) and app smoke tests on Linux, plus
   UI checks on a virtual display. Not yet verified by ear or on real interfaces: the drum
   sounds, Ynot Tune on real vocals, M4A/MP3 encoding on real Macs/PCs, multi-channel
   interfaces, and buffer/rate changes on hardware.

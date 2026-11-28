@@ -38,12 +38,80 @@ void Session::newDemo(const juce::File& dir) {
     loaded_ = true;
     project_.sampleRateHint = sampleRate_;  // a new project starts at the device's current rate
     ynot::saveProjectPackage(project_, dir_.getFullPathName().toStdString());
+    modified_ = false;
+    rememberRecent(dir_);
     media_ = std::make_unique<ynot::PackageMediaProvider>(dir_.getFullPathName().toStdString());
     rebuild();
 }
 
+void Session::newSong(const juce::File& dir) {
+    dir.createDirectory();
+    ynot::Project p;
+    p.id = ynot::newId();
+    p.name = dir.getFileNameWithoutExtension().toStdString();
+    p.tempoBpm = 120;
+    p.sampleRateHint = sampleRate_;
+    ynot::addTrack(p, ynot::TrackKind::Audio, "Audio 1");
+    ynot::addTrack(p, ynot::TrackKind::Instrument, "Instrument 1");
+    project_ = std::move(p);
+    history_.clear();
+    dir_ = dir;
+    loaded_ = true;
+    ynot::saveProjectPackage(project_, dir_.getFullPathName().toStdString());
+    media_ = std::make_unique<ynot::PackageMediaProvider>(dir_.getFullPathName().toStdString());
+    modified_ = false;
+    rememberRecent(dir_);
+    rebuild();
+}
+
+juce::String Session::saveAs(const juce::File& newDir) {
+    if (!loaded_) return "Nothing to save yet.";
+    if (newDir == dir_) {
+        save();
+        return {};
+    }
+    if (newDir.exists() && !(newDir.isDirectory() && newDir.getNumberOfChildFiles(juce::File::findFilesAndDirectories) == 0))
+        return "\"" + newDir.getFileName() + "\" already exists. Choose another name.";
+    save();
+    if (!dir_.copyDirectoryTo(newDir)) return "Couldn't copy the project to \"" + newDir.getFullPathName() + "\".";
+    dir_ = newDir;
+    project_.name = newDir.getFileNameWithoutExtension().toStdString();
+    media_ = std::make_unique<ynot::PackageMediaProvider>(dir_.getFullPathName().toStdString());
+    save();
+    rememberRecent(dir_);
+    rebuild();
+    return {};
+}
+
+static juce::File recentFile() {
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Ynot")
+        .getChildFile("recent-projects.txt");
+}
+
+juce::StringArray Session::recentProjects() {
+    juce::StringArray list;
+    list.addLines(recentFile().loadFileAsString());
+    list.removeEmptyStrings();
+    juce::StringArray existing;
+    for (const auto& path : list)
+        if (juce::File(path).isDirectory()) existing.add(path);
+    return existing;
+}
+
+void Session::rememberRecent(const juce::File& dir) {
+    auto list = recentProjects();
+    list.removeString(dir.getFullPathName());
+    list.insert(0, dir.getFullPathName());
+    while (list.size() > 10) list.remove(list.size() - 1);
+    recentFile().getParentDirectory().createDirectory();
+    recentFile().replaceWithText(list.joinIntoString("\n"));
+}
+
 void Session::open(const juce::File& dir) {
     project_ = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
+    modified_ = false;
+    rememberRecent(dir);
     history_.clear();
     dir_ = dir;
     loaded_ = true;
@@ -56,12 +124,14 @@ void Session::save() {
     if (!loaded_) return;
     host_.captureState(project_);
     ynot::saveProjectPackage(project_, dir_.getFullPathName().toStdString());
+    modified_ = false;
 }
 
 void Session::edit(const std::function<void(ynot::Project&)>& fn, bool undoStep) {
     if (!loaded_) return;
     host_.captureState(project_);  // keep plugin tweaks made in their editors
     if (undoStep) history_.record(project_);
+    modified_ = true;
     fn(project_);
     rebuild();
 }
@@ -70,6 +140,7 @@ bool Session::undo() {
     if (!loaded_ || recording_ || !history_.canUndo()) return false;
     host_.captureState(project_);
     history_.undo(project_);
+    modified_ = true;
     rebuild();
     return true;
 }
@@ -78,6 +149,7 @@ bool Session::redo() {
     if (!loaded_ || recording_ || !history_.canRedo()) return false;
     host_.captureState(project_);
     history_.redo(project_);
+    modified_ = true;
     rebuild();
     return true;
 }
@@ -108,6 +180,7 @@ void Session::pushMixToEngine() {
 
 void Session::beginMixChange() {
     if (loaded_) history_.record(project_);
+    modified_ = true;
 }
 
 void Session::setTrackGain(const std::string& id, double gainDb) {
@@ -155,6 +228,7 @@ void Session::applyLoopToEngine(ynot::Engine& e) const {
 
 void Session::setLoopRange(int64_t startTick, int64_t endTick) {
     if (recording_) return;
+    modified_ = true;
     if (endTick < startTick) std::swap(startTick, endTick);
     project_.loop.startTick = std::max<int64_t>(0, startTick);
     project_.loop.endTick = std::max(project_.loop.startTick + ynot::kTicksPerQuarter, endTick);  // at least a beat
@@ -164,6 +238,7 @@ void Session::setLoopRange(int64_t startTick, int64_t endTick) {
 
 void Session::setLoopEnabled(bool on) {
     if (recording_) return;
+    modified_ = true;
     if (on && !project_.loop.valid()) {  // first use: the 4 bars from the playhead's bar
         const int64_t bar = positionTick() / project_.barTicks() * project_.barTicks();
         project_.loop.startTick = bar;

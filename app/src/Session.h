@@ -28,8 +28,15 @@ public:
 
     // Project lifecycle.
     void newDemo(const juce::File& packageDir);
+    void newSong(const juce::File& packageDir);  // empty song: one audio and one instrument track
     void open(const juce::File& packageDir);
     void save();
+    // Copies the whole project (with its recordings) to a new folder and continues there.
+    juce::String saveAs(const juce::File& packageDir);  // error message, or empty
+    bool isModified() const { return modified_; }       // edits since the last save
+    // Recently used projects on this device (most recent first).
+    static juce::StringArray recentProjects();
+    static void rememberRecent(const juce::File& packageDir);
     bool hasProject() const { return loaded_; }
     const ynot::Project& project() const { return project_; }
     juce::File packageDir() const { return dir_; }
@@ -226,6 +233,7 @@ private:
     ynot::Project project_;
     juce::File dir_;
     bool loaded_ = false;
+    bool modified_ = false;
     std::unique_ptr<ynot::PackageMediaProvider> media_;
     std::vector<ynot::EngineIssue> issues_;
 

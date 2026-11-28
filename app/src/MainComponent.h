@@ -6,6 +6,8 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include "ArrangeView.h"
+#include "CounterDisplay.h"
+#include "InspectorView.h"
 #include "MixerView.h"
 #include "StepSequencerView.h"
 #include "Session.h"
@@ -16,7 +18,39 @@ namespace ynotapp {
 
 juce::File pluginCacheFile();  // device-local list of scanned plugins (Main.cpp)
 
-class MainComponent : public juce::Component, private juce::Timer {
+// Transport button with a drawn icon (works the same in every font).
+class IconButton : public juce::TextButton {
+public:
+    enum class Icon { ToStart, Play, Record };
+    explicit IconButton(Icon icon) : juce::TextButton(juce::String()), icon_(icon) {}
+    void paintButton(juce::Graphics& g, bool over, bool down) override {
+        auto& lf = getLookAndFeel();
+        lf.drawButtonBackground(g, *this, findColour(getToggleState() ? buttonOnColourId : buttonColourId), over, down);
+        auto r = getLocalBounds().toFloat().withSizeKeepingCentre(16.f, 16.f);
+        g.setColour(findColour(getToggleState() ? textColourOnId : textColourOffId));
+        juce::Path p;
+        switch (icon_) {
+            case Icon::ToStart:
+                g.fillRect(r.removeFromLeft(3.f));
+                p.addTriangle(r.getRight(), r.getY(), r.getRight(), r.getBottom(), r.getX() + 1.f, r.getCentreY());
+                break;
+            case Icon::Play:
+                if (getToggleState()) p.addRectangle(r.reduced(1.f));  // playing: stop square
+                else p.addTriangle(r.getX() + 2.f, r.getY(), r.getX() + 2.f, r.getBottom(), r.getRight(), r.getCentreY());
+                break;
+            case Icon::Record:
+                g.setColour(getToggleState() ? juce::Colours::white : juce::Colour(0xffff4d5e));
+                p.addEllipse(r.reduced(1.f));
+                break;
+        }
+        g.fillPath(p);
+    }
+
+private:
+    Icon icon_;
+};
+
+class MainComponent : public juce::Component, public juce::MenuBarModel, private juce::Timer {
 public:
     MainComponent(Session& session, JucePluginHost& host);
     ~MainComponent() override;
@@ -26,6 +60,10 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    // Menu bar (macOS: the system menu bar; Windows/Linux: across the top of the window).
+    juce::StringArray getMenuBarNames() override;
+    juce::PopupMenu getMenuForIndex(int index, const juce::String& name) override;
+    void menuItemSelected(int, int) override {}
     bool keyPressed(const juce::KeyPress& key) override;
     bool keyStateChanged(bool isKeyDown) override;
     // Take keyboard focus as soon as the window is on screen, so shortcuts (Space, Return,
@@ -51,8 +89,12 @@ private:
 
     void refresh();
     void refreshCompatibility();
+    void layoutDesktop();
     void openProject();
     void newDemo();
+    void newSong();
+    void saveAs();
+    void openRecent(const juce::File& dir);
     void showAudioSettings();
     void toggleRecording();
     void togglePlay();
@@ -86,7 +128,9 @@ private:
     ynot::LayoutDecision layout_{};
 
     // Transport and editing (always visible).
-    juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
+    IconButton startButton_{IconButton::Icon::ToStart}, playButton_{IconButton::Icon::Play},
+        recordButton_{IconButton::Icon::Record};
+    juce::TextButton clickButton_{"Click"};
     juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
     juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"}, rateButton_{"48 kHz"}, tempoButton_{"120 BPM"}, loopButton_{"Loop"}, mixerButton_{"Mixer"}, exportButton_{"Export"}, stepsButton_{"Steps"};
     juce::TextButton addTrackButton_{"+ Track"};
@@ -96,6 +140,12 @@ private:
     juce::TextButton audioButton_{"Audio"}, scanButton_{"Scan Plugins"}, moreButton_{"More"};
     juce::Label status_;
     ArrangeView arrange_;
+    CounterDisplay counter_;
+    InspectorView inspector_;
+    bool inspectorVisible_ = true, compatPanelVisible_ = false;
+#if !(JUCE_MAC || JUCE_IOS || JUCE_ANDROID)
+    juce::MenuBarComponent menuBar_{this};
+#endif
     MixerView mixer_;
     StepSequencerView steps_;
     // On-screen keyboard: plays armed instrument tracks exactly like a MIDI controller.

@@ -38,6 +38,8 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
       host_(host),
       theme_(Theme::load(true)),
       arrange_(session, host, theme_),
+      counter_(session, theme_),
+      inspector_(session, arrange_, theme_),
       mixer_(session, theme_),
       steps_(session, theme_),
       keyboard_(session.keyboardState(), juce::KeyboardComponentBase::horizontalKeyboard) {
@@ -45,7 +47,8 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     setLookAndFeel(&lnf_);
     setWantsKeyboardFocus(true);
 
-    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
+    for (juce::TextButton* b : std::initializer_list<juce::TextButton*>{
+             &startButton_, &playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_,
                     &mixerButton_, &exportButton_, &stepsButton_})
@@ -102,7 +105,8 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     };
     addChildComponent(keyboard_);
     // Clicking a button must not steal keyboard focus, or musical typing stops after pressing R/Record.
-    for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
+    for (juce::TextButton* b : std::initializer_list<juce::TextButton*>{
+             &startButton_, &playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_,
                     &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_, &mixerButton_, &exportButton_, &stepsButton_})
@@ -125,6 +129,21 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     keyboard_.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, theme_.primary.withAlpha(0.3f));
 
     playButton_.onClick = [this] { togglePlay(); };
+    startButton_.setTooltip("Go to the start (Return)");
+    startButton_.onClick = [this] {
+        if (!session_.isRecording()) session_.seekToTick(0);
+        arrange_.repaint();
+    };
+    playButton_.setTooltip("Play / Stop (Space)");
+    recordButton_.setTooltip("Record armed tracks");
+    addAndMakeVisible(counter_);
+    addAndMakeVisible(inspector_);
+    arrange_.onFocusTrackChanged = [this](const std::string&) { inspector_.refresh(); };
+#if JUCE_MAC
+    juce::MenuBarModel::setMacMainMenu(this);
+#elif !(JUCE_IOS || JUCE_ANDROID)
+    addAndMakeVisible(menuBar_);
+#endif
     recordButton_.onClick = [this] { toggleRecording(); };
     clickButton_.onClick = [this] { session_.setMetronome(clickButton_.getToggleState()); };
     countInButton_.onClick = [this] { session_.setCountInBars(countInButton_.getToggleState() ? 1 : 0); };
@@ -165,18 +184,121 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
 }
 
 MainComponent::~MainComponent() {
+#if JUCE_MAC
+    juce::MenuBarModel::setMacMainMenu(nullptr);
+#endif
     session_.onChange = nullptr;
     setLookAndFeel(nullptr);
 }
 
 void MainComponent::paint(juce::Graphics& g) { g.fillAll(theme_.background); }
 
+// Desktop and tablet layout, like a studio DAW: transport bar with a big position counter,
+// a tool row, the inspector on the left, tracks in the middle, editors docked underneath.
+void MainComponent::layoutDesktop() {
+    auto r = getLocalBounds();
+#if !(JUCE_MAC || JUCE_IOS || JUCE_ANDROID)
+    menuBar_.setBounds(r.removeFromTop(24));
+#endif
+    r = r.reduced(12, 8);
+    auto place = [](juce::Rectangle<int>& row, juce::Component& c, int w, bool fromRight = false) {
+        c.setVisible(true);
+        c.setBounds(fromRight ? row.removeFromRight(w) : row.removeFromLeft(w));
+        if (fromRight) row.removeFromRight(6);
+        else row.removeFromLeft(6);
+    };
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&moreButton_, &newButton_, &openButton_})
+        c->setVisible(false);
+
+    // Row 1: transport, counter, recording modes; save state and device check on the right.
+    auto row1 = r.removeFromTop(46);
+    place(row1, startButton_, 46);
+    place(row1, playButton_, 58);
+    place(row1, recordButton_, 58);
+    row1.removeFromLeft(6);
+    place(row1, counter_, 280);
+    row1.removeFromLeft(6);
+    for (auto* b : {&loopButton_, &clickButton_, &countInButton_, &punchButton_, &monitorButton_}) place(row1, *b, 82);
+    place(row1, saveButton_, 96, true);
+    compatSummary_.setVisible(!compatPanelVisible_);
+    if (!compatPanelVisible_ && row1.getWidth() > 160) place(row1, compatSummary_, std::min(300, row1.getWidth()), true);
+    else if (!compatPanelVisible_) compatSummary_.setVisible(false);
+
+    // Row 2: song settings and editing on the left, windows and panels on the right.
+    r.removeFromTop(6);
+    auto row2 = r.removeFromTop(30);
+    place(row2, addTrackButton_, 90);
+    place(row2, tempoButton_, 96);
+    place(row2, timeSigButton_, 60);
+    place(row2, rateButton_, 82);
+    place(row2, quantizeButton_, 112);
+    place(row2, undoButton_, 64);
+    place(row2, redoButton_, 64);
+    place(row2, keysButton_, 64, true);
+    place(row2, stepsButton_, 70, true);
+    place(row2, mixerButton_, 70, true);
+    place(row2, exportButton_, 80, true);
+    if (canScanPlugins()) place(row2, scanButton_, 80, true);
+    else scanButton_.setVisible(false);
+    place(row2, audioButton_, 80, true);
+    status_.setBounds(row2.reduced(4, 0));
+    r.removeFromTop(8);
+
+    // Device compatibility (Stage 17): side panel when shown, else the summary chip above.
+    for (auto* c : std::initializer_list<juce::Component*>{&compatTitle_, &target_, &prepareButton_, &compat_})
+        c->setVisible(compatPanelVisible_);
+    if (compatPanelVisible_) {
+        auto side = r.removeFromRight(std::min(340, r.getWidth() / 4 + 40));
+        r.removeFromRight(10);
+        compatTitle_.setBounds(side.removeFromTop(24));
+        target_.setBounds(side.removeFromTop(32));
+        side.removeFromTop(6);
+        prepareButton_.setBounds(side.removeFromTop(32));
+        side.removeFromTop(6);
+        compat_.setBounds(side);
+    }
+    inspector_.setVisible(inspectorVisible_ && r.getWidth() >= 900);
+    if (inspector_.isVisible()) {
+        inspector_.setBounds(r.removeFromLeft(240));
+        r.removeFromLeft(8);
+    }
+    if (keyboard_.isVisible()) {
+        keyboard_.setKeyWidth(22.f);
+        keyboard_.setBounds(r.removeFromBottom(90));
+        r.removeFromBottom(8);
+    }
+    juce::Component* panel = mixer_.isVisible() ? static_cast<juce::Component*>(&mixer_)
+                             : steps_.isVisible() ? static_cast<juce::Component*>(&steps_)
+                                                  : nullptr;
+    if (panel) {
+        const int want = panel == &steps_ ? 60 + 26 * 11 : 340;
+        panel->setBounds(r.removeFromBottom(std::min(want, r.getHeight() / 2)));
+        r.removeFromBottom(8);
+    }
+    arrange_.setVisible(true);
+    arrange_.setBounds(r);
+    arrange_.setLayout(layout_);
+}
+
 void MainComponent::resized() {
     layout_ = ynot::decideLayout({layoutPlatformOverride.value_or(ynot::currentPlatform()),
                                   static_cast<double>(getWidth()), static_cast<double>(getHeight()),
                                   hasPrecisePointer(), hasPrecisePointer()});
     const int target = static_cast<int>(std::max(layout_.minTouchTargetDp, 32.0));
+    if (!compact()) {
+        layoutDesktop();
+        return;
+    }
+    counter_.setVisible(false);
+    inspector_.setVisible(false);
+    startButton_.setVisible(false);
+    target_.setVisible(true);
     auto r = getLocalBounds().reduced(12);
+#if !(JUCE_MAC || JUCE_IOS || JUCE_ANDROID)
+    // Narrow desktop windows: the menu bar stays, above the phone-style toolbar.
+    menuBar_.setBounds(getLocalBounds().removeFromTop(24));
+    r.removeFromTop(24);
+#endif
 
     // Toolbar. Phones keep transport + editing and move file/device actions into "More".
     // Phones: Count-in and Monitor live in "More" as tick items to keep the toolbar to two rows.
@@ -290,6 +412,16 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
         return session_.redo(), true;
     if (key == juce::KeyPress('s', cmd, 0)) return session_.save(), true;
     if (key == juce::KeyPress('e', cmd, 0)) return ExportPanel::show(session_, theme_), true;
+    if (key == juce::KeyPress('s', cmd | juce::ModifierKeys::shiftModifier, 0)) return saveAs(), true;
+    if (key == juce::KeyPress('n', cmd, 0)) return newSong(), true;
+    if (key == juce::KeyPress('o', cmd, 0)) return openProject(), true;
+    if (key == juce::KeyPress('i', cmd, 0)) return importAudio({}), true;
+    if (!keyboard_.isVisible() && !key.getModifiers().isAnyModifierKeyDown() &&
+        (key.getTextCharacter() == 'i' || key.getTextCharacter() == 'I')) {
+        inspectorVisible_ = !inspectorVisible_;
+        resized();
+        return true;
+    }
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'x' || key.getTextCharacter() == 'X'))
         return toggleMixer(), true;
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'b' || key.getTextCharacter() == 'B'))
@@ -310,6 +442,16 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
 }
 
 void MainComponent::timerCallback() {
+    // Save state: the Save button lights up when there are unsaved changes.
+    if (session_.hasProject()) {
+        const bool modified = session_.isModified();
+        saveButton_.setButtonText(modified ? "Save" : "Saved");
+        saveButton_.setToggleState(modified, juce::dontSendNotification);
+        if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) {
+            const auto title = juce::String(session_.project().name) + (modified ? " (edited)" : "") + " - Ynot";
+            if (w->getName() != title) w->setName(title);
+        }
+    }
     // A sandboxed plugin crashed: tell the user (once) — playback carries on without it.
     for (const auto& report : host_.takeCrashReports())
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Plugin problem",
@@ -348,6 +490,8 @@ void MainComponent::timerCallback() {
 void MainComponent::refresh() {
     playButton_.setButtonText(session_.isPlaying() ? "Stop" : "Play");
     playButton_.setToggleState(session_.isPlaying(), juce::dontSendNotification);
+    inspector_.refresh();
+    menuItemsChanged();
     recordButton_.setToggleState(session_.isRecording(), juce::dontSendNotification);
     recordButton_.setButtonText(session_.isRecording() ? "Stop Rec" : "Record");
     undoButton_.setEnabled(session_.canUndo() && !session_.isRecording());
@@ -423,6 +567,155 @@ void MainComponent::newDemo() {
     session_.newDemo(dir);
 }
 
+void MainComponent::newSong() {
+    auto dir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                   .getChildFile("Ynot").getNonexistentChildFile("Untitled", ".ynot");
+    session_.newSong(dir);
+}
+
+void MainComponent::saveAs() {
+    if (!session_.hasProject()) return;
+    chooser_ = std::make_unique<juce::FileChooser>(
+        "Save the song as", session_.packageDir().getParentDirectory().getNonexistentChildFile(
+                                juce::String(session_.project().name) + " copy", ".ynot"),
+        "*.ynot");
+    chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this](const juce::FileChooser& fc) {
+                              auto dir = fc.getResult();
+                              if (dir == juce::File()) return;
+                              if (dir.getFileExtension() != ".ynot") dir = dir.withFileExtension(".ynot");
+                              const auto err = session_.saveAs(dir);
+                              if (err.isNotEmpty())
+                                  juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                                         "Save As", err);
+                              refresh();
+                          });
+}
+
+void MainComponent::openRecent(const juce::File& dir) {
+    try {
+        session_.open(dir);
+    } catch (const std::exception& e) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Can't open project", e.what());
+    }
+}
+
+juce::StringArray MainComponent::getMenuBarNames() { return {"File", "Edit", "Track", "Transport", "View"}; }
+
+juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&) {
+    juce::PopupMenu m;
+    const bool hasSong = session_.hasProject();
+    auto add = [&m](const juce::String& text, const juce::String& keys, bool enabled, bool ticked,
+                    std::function<void()> action) {
+        juce::PopupMenu::Item item(text);
+        item.shortcutKeyDescription = keys;
+        item.isEnabled = enabled;
+        item.isTicked = ticked;
+        item.action = std::move(action);
+        m.addItem(std::move(item));
+    };
+#if JUCE_MAC
+    const juce::String cmd = juce::CharPointer_UTF8("\xe2\x8c\x98"), shift = juce::CharPointer_UTF8("\xe2\x87\xa7");
+#else
+    const juce::String cmd = "Ctrl+", shift = "Shift+";
+#endif
+    switch (index) {
+        case 0: {  // File
+            add("New Song", cmd + "N", true, false, [this] { newSong(); });
+            add("New Demo Song", {}, true, false, [this] { newDemo(); });
+            add("Open...", cmd + "O", true, false, [this] { openProject(); });
+            juce::PopupMenu recent;
+            for (const auto& path : Session::recentProjects()) {
+                const juce::File f(path);
+                recent.addItem(f.getFileNameWithoutExtension() + "   (" + f.getParentDirectory().getFullPathName() + ")",
+                               [this, f] { openRecent(f); });
+            }
+            if (recent.getNumItems() == 0) recent.addItem("No recent songs", false, false, [] {});
+            m.addSubMenu("Open Recent", recent);
+            m.addSeparator();
+            add("Save", cmd + "S", hasSong, false, [this] { session_.save(); refresh(); });
+            add("Save As...", shift + cmd + "S", hasSong, false, [this] { saveAs(); });
+            add("Export...", cmd + "E", hasSong, false, [this] { ExportPanel::show(session_, theme_); });
+            m.addSeparator();
+            add("Import Audio...", cmd + "I", hasSong, false, [this] { importAudio({}); });
+            add("Audio Interface...", {}, true, false, [this] { showAudioSettings(); });
+            if (canScanPlugins()) {
+                juce::PopupMenu pm;
+                addPluginItems(pm);
+                m.addSubMenu("Plugins", pm);
+            }
+            break;
+        }
+        case 1: {  // Edit
+            add("Undo", cmd + "Z", session_.canUndo(), false, [this] { session_.undo(); });
+            add("Redo", shift + cmd + "Z", session_.canRedo(), false, [this] { session_.redo(); });
+            m.addSeparator();
+            const bool sel = arrange_.hasSelection();
+            add("Cut", cmd + "X", sel, false, [this] { arrange_.cutSelection(); });
+            add("Copy", cmd + "C", sel, false, [this] { arrange_.copySelection(); });
+            add("Paste at Playhead", cmd + "V", hasSong, false, [this] { arrange_.paste(); });
+            add("Duplicate", cmd + "D", sel, false, [this] { arrange_.duplicateSelection(); });
+            add("Delete", "Delete", sel, false, [this] { arrange_.deleteSelected(); });
+            m.addSeparator();
+            add("Select All", cmd + "A", hasSong, false, [this] { arrange_.selectAll(); });
+            add("Split at Playhead", "S", sel, false, [this] { arrange_.splitSelectedAtPlayhead(); });
+            break;
+        }
+        case 2: {  // Track
+            addTrackItems(m);
+            m.addSeparator();
+            const auto focus = arrange_.focusedTrackId();
+            add("Instrument & Effects for the Selected Track...", {}, !focus.empty(), false,
+                [this, focus] { arrange_.showTrackMenu(focus, &inspector_); });
+            juce::PopupMenu q;
+            addQuantizeItems(q);
+            m.addSubMenu("Quantize", q);
+            break;
+        }
+        case 3: {  // Transport
+            add(session_.isPlaying() ? "Stop" : "Play", "Space", hasSong, false, [this] { togglePlay(); });
+            add(session_.isRecording() ? "Stop Recording" : "Record", {}, hasSong, false, [this] { toggleRecording(); });
+            add("Go to Start", "Return", hasSong, false, [this] { session_.seekToTick(0); arrange_.repaint(); });
+            m.addSeparator();
+            add("Loop", "L", hasSong, session_.loopEnabled(), [this] { session_.setLoopEnabled(!session_.loopEnabled()); refresh(); });
+            add("Click", {}, true, session_.metronome(), [this] {
+                session_.setMetronome(!session_.metronome());
+                clickButton_.setToggleState(session_.metronome(), juce::dontSendNotification);
+            });
+            add("Count-in (1 bar)", {}, true, session_.countInBars() > 0, [this] {
+                session_.setCountInBars(session_.countInBars() > 0 ? 0 : 1);
+                countInButton_.setToggleState(session_.countInBars() > 0, juce::dontSendNotification);
+            });
+            juce::PopupMenu punch, tempo, ts, rate;
+            addPunchItems(punch);
+            addTempoItems(tempo);
+            addTimeSignatureItems(ts);
+            addSampleRateItems(rate);
+            m.addSubMenu("Punch Recording", punch);
+            m.addSubMenu("Tempo", tempo, hasSong);
+            m.addSubMenu("Time Signature", ts, hasSong);
+            m.addSubMenu("Sample Rate", rate);
+            break;
+        }
+        case 4: {  // View
+            add("Mixer", "X", true, mixer_.isVisible(), [this] { toggleMixer(); });
+            add("Step Sequencer", "B", true, steps_.isVisible(), [this] { toggleSteps(); });
+            add("On-screen Keyboard", {}, true, keyboard_.isVisible(), [this] { showKeyboard(!keyboard_.isVisible()); });
+            add("Inspector", "I", true, inspectorVisible_, [this] {
+                inspectorVisible_ = !inspectorVisible_;
+                resized();
+            });
+            add("Device Compatibility Panel", {}, true, compatPanelVisible_, [this] {
+                compatPanelVisible_ = !compatPanelVisible_;
+                resized();
+            });
+            break;
+        }
+        default: break;
+    }
+    return m;
+}
+
 void MainComponent::openProject() {
     chooser_ = std::make_unique<juce::FileChooser>(
         "Open a Ynot project folder", juce::File::getSpecialLocation(juce::File::userDocumentsDirectory));
@@ -444,6 +737,7 @@ void MainComponent::showMoreMenu() {
     m.addItem("New Demo", [this] { newDemo(); });
     m.addItem("Open...", [this] { openProject(); });
     m.addItem("Save", [this] { session_.save(); });
+    m.addItem("Save As...", [this] { saveAs(); });
     m.addItem("Export song...", [this] { ExportPanel::show(session_, theme_); });
     m.addSeparator();
     m.addItem("Count-in (1 bar)", true, session_.countInBars() > 0, [this] {

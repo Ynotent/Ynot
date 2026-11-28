@@ -93,6 +93,10 @@ public:
             g.setColour(th.record.withAlpha(0.22f));
             g.fillRoundedRectangle(r.toFloat(), 6.f);
         }
+        if (owner_.focusedTrackId() == id_) {  // the track shown in the inspector
+            g.setColour(th.text.withAlpha(0.08f));
+            g.fillRoundedRectangle(r.toFloat(), 6.f);
+        }
         if (track_.armed) {   // armed: red outline so it's obvious which tracks will record
             g.setColour(th.record);
             g.drawRoundedRectangle(r.toFloat().reduced(1.f), 6.f, recordingHere ? 2.5f : 1.5f);
@@ -131,7 +135,9 @@ public:
         }
     }
 
-    // Click the track name: instrument, effects, freeze, rename, delete.
+    // Click the track name: instrument, effects, freeze, rename, delete. Any click also makes
+    // it the track shown in the inspector.
+    void mouseDown(const juce::MouseEvent&) override { owner_.focusTrack(id_); }
     void mouseUp(const juce::MouseEvent& e) override {
         if (e.mouseWasDraggedSinceMouseDown()) return;
         owner_.showTrackMenu(id_, this);
@@ -1244,6 +1250,22 @@ void ArrangeView::stretchClip(const std::string& trackId, const std::string& cli
     });
 }
 
+void ArrangeView::focusTrack(const std::string& trackId) {
+    if (focusTrack_ == trackId) return;
+    focusTrack_ = trackId;
+    repaint();
+    if (onFocusTrackChanged) onFocusTrackChanged(trackId);
+}
+
+std::string ArrangeView::focusedTrackId() const {
+    if (session_.hasProject()) {
+        if (session_.project().findTrack(focusTrack_)) return focusTrack_;
+        const auto ordered = session_.project().orderedTracks();
+        if (!ordered.empty()) return ordered.front()->id;
+    }
+    return {};
+}
+
 int64_t ArrangeView::clipStartTick(const std::string& trackId, const std::string& clipId) const {
     auto span = ynot::findClip(session_.project(), trackId, clipId);
     return span ? span->startTick : 0;
@@ -1312,6 +1334,7 @@ bool ArrangeView::isSelected(const std::string& trackId, const std::string& clip
 void ArrangeView::selectOnly(const ClipKey& k) {
     selection_ = {k};
     selected_ = k;
+    focusTrack(k.trackId);
     repaint();
 }
 
