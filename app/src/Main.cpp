@@ -11,6 +11,7 @@
 #include <iostream>
 
 #include "AiPanel.h"
+#include "CreatorPanels.h"
 #include "MainComponent.h"
 #include "AudioImporter.h"
 #include "PluginSandbox.h"
@@ -794,6 +795,60 @@ static int runSmokeTest(const juce::File& dir) {
         wav.deleteFile();
     }
 
+    {   // Clearance, original ideas, sound packs and the preview player.
+        const int before = ynot::unclearedCount(session.project());
+        ynot::ReferenceProfile ref;
+        ref.bpm = 96;
+        ref.key.tonic = 9;
+        ref.key.minor = true;
+        ref.chords = {"Am", "F", "C", "G"};
+        const auto idea = ynot::generateOriginalIdea(ref, 5);
+        const size_t tracksBefore = session.project().tracks.size();
+        const auto ids = session.addIdea(idea, false, "Reference");
+        const auto sampler = session.ideaToSampler(idea, "Reference");
+        const auto* s = ynot::samplerOf(session.project(), sampler);
+        const auto* credit = s ? ynot::findCredit(session.project(), s->params.getString("mediaId", "")) : nullptr;
+        expect(ids.size() == 4 && session.project().tracks.size() == tracksBefore + 5 && credit &&
+                   credit->status == ynot::ClearanceStatus::Original && ynot::unclearedCount(session.project()) == before,
+               "an original idea becomes 4 editable tracks or a sample, credited as original (nothing to clear)");
+        const auto pack = session.addPackSoundToSampler("breaks/lofi-84");
+        const auto clip = session.addPackSoundAsClip("loops/late-night-keys");
+        expect(!pack.empty() && !clip.empty() && ynot::unclearedCount(session.project()) == before,
+               "Ynot pack sounds go into the sampler or the song, credited royalty-free");
+        // Preview plays with the transport stopped.
+        std::vector<float> silence(512), outL(512), outR(512);
+        const float* ins[2] = {silence.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        session.stop();
+        session.edit([&](ynot::Project& p) { for (auto& t : p.tracks) t.mute = true; });
+        session.previewAudio(ynot::renderPackSound("drums/36", 44100));
+        float pk = 0;
+        for (int b = 0; b < 20; ++b) {
+            session.processForTesting(ins, 2, outs, 2, 512);
+            for (float v : outL) pk = std::max(pk, std::abs(v));
+        }
+        session.stopPreview();
+        session.processForTesting(ins, 2, outs, 2, 512);
+        float after = 0;
+        for (float v : outL) after = std::max(after, std::abs(v));
+        expect(pk > 0.1f && after < 1e-4f, "sound previews play (and stop) with the transport stopped");
+        // An imported file needs clearing and is listed with its file name.
+        const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("ynot-smoke-loop.wav");
+        ynot::writeFileBytes(wav.getFullPathName().toStdString(), ynot::encodeWavFloat32(ynot::renderPackSound("drums/38", 44100)));
+        const auto err = session.importAudioFileNow(wav, {}, 0);
+        bool listed = false;
+        for (const auto& u : ynot::clearanceReport(session.project()))
+            listed |= u.name == "ynot-smoke-loop.wav" && u.status == ynot::ClearanceStatus::Unknown;
+        const auto csv = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("ynot-smoke-clearance.csv");
+        const auto csvErr = session.exportClearanceSheet(csv);
+        expect(err.isEmpty() && listed && ynot::unclearedCount(session.project()) == before + 1 && csvErr.isEmpty() &&
+                   csv.loadFileAsString().contains("ynot-smoke-loop.wav"),
+               "imported audio is listed for clearance by file name; the clearance sheet is written");
+        wav.deleteFile();
+        csv.deleteFile();
+        for (int i = 0; i < 6; ++i) session.undo();
+    }
+
     {   // Ynot AI runs on this device: key of the demo song.
         const auto avail = Session::aiAvailable(ynot::AiFeature::ChordAndKeyDetection);
         ynot::PackageMediaProvider media(session.packageDir().getFullPathName().toStdString());
@@ -977,6 +1032,25 @@ public:
             juce::File png(args[i + 1].unquoted());
             int w = args[i + 2].getIntValue(), h = args[i + 3].getIntValue();
             juce::Component* content = window_->getContentComponent();
+            static Theme panelTheme = Theme::load(true);
+            if (args.contains("--panel") && session_->hasProject()) {  // UI checks: clearance | inspire | packs
+                const auto which = args[args.indexOf("--panel") + 1];
+                if (which == "clearance") aiPanel_ = std::make_unique<ClearancePanel>(*session_, panelTheme);
+                if (which == "packs") aiPanel_ = std::make_unique<SoundPacksPanel>(*session_, panelTheme);
+                if (which == "inspire") {
+                    ynot::ReferenceProfile ref;
+                    ref.bpm = 92;
+                    ref.key.tonic = 9;
+                    ref.key.minor = true;
+                    ref.chords = {"Am", "F", "C", "G"};
+                    aiPanel_ = std::make_unique<InspirePanel>(*session_, panelTheme, ref, "my-favourite-song");
+                }
+                if (aiPanel_) {
+                    content = aiPanel_.get();
+                    w = content->getWidth();
+                    h = content->getHeight();
+                }
+            }
             if (args.contains("--ai-panel") && session_->hasProject()) {  // UI checks: the Key & Chords window
                 ynot::PackageMediaProvider media(session_->packageDir().getFullPathName().toStdString());
                 Session::SongAnalysis r{ynot::detectSongKey(session_->project(), media),
@@ -1005,6 +1079,7 @@ public:
     void shutdown() override {
         shutdownSandboxChild();
         simulated_.reset();
+        aiPanel_.reset();  // panels talk to the session: before it goes
         window_.reset();
         session_.reset();
         host_.reset();

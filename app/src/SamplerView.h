@@ -24,6 +24,7 @@ public:
     void refresh();
     const std::string& trackId() const { return trackId_; }
     std::function<void()> onRequestNewSampler;  // "+ Sampler track" (the main window picks a file)
+    std::function<void()> onRequestPacks;       // "Sound packs..." 
 
     void resized() override;
     void paint(juce::Graphics& g) override;
@@ -56,7 +57,7 @@ private:
     const Theme& theme_;
     std::string trackId_;
     juce::Label title_, hint_;
-    juce::TextButton load_{"Load sample..."}, autoChop_{"Auto-chop"}, newTrack_{"+ Sampler track"};
+    juce::TextButton load_{"Load sample..."}, autoChop_{"Auto-chop"}, newTrack_{"+ Sampler track"}, packs_{"Sound packs..."};
     juce::ComboBox mode_, equal_, root_;
     juce::Slider attack_, release_, tune_;
     juce::Label attackLabel_{{}, "Attack"}, releaseLabel_{{}, "Release"}, tuneLabel_{{}, "Tune"};

@@ -31,7 +31,8 @@ private:
         rangeLabel_{{}, "Range"}, note_;
     juce::ComboBox format_, quality_, rate_, range_;
     juce::ToggleButton normalize_{"Normalize (loudest peak at -1 dB)"};
-    juce::TextButton export_{"Export..."}, cancel_{"Cancel"};
+    juce::TextButton export_{"Export..."}, cancel_{"Cancel"}, reviewSamples_{"Review samples..."};
+    juce::Label clearance_;
     std::unique_ptr<juce::FileChooser> chooser_;
 };
 

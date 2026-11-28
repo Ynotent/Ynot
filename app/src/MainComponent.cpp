@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "AiPanel.h"
+#include "CreatorPanels.h"
 
 #include "AudioImporter.h"
 #include "AudioIOPanel.h"
@@ -61,6 +62,9 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     samplerButton_.setTooltip("Ynot Sampler: chop a sample onto pads (P)");
     samplerButton_.onClick = [this] { toggleSampler(); };
     sampler_.onRequestNewSampler = [this] { newSamplerTrack(); };
+    sampler_.onRequestPacks = [this] {
+        SoundPacksPanel::show(session_, theme_, [this](const std::string& id) { openSampler(id); });
+    };
     arrange_.onOpenSampler = [this](const std::string& t) { openSampler(t); };
     aiButton_.setTooltip("Ynot AI: key & chords, audio to MIDI, tempo");
     aiButton_.onClick = [this] {
@@ -728,6 +732,14 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&) {
             add("Save", cmd + "S", hasSong, false, [this] { session_.save(); refresh(); });
             add("Save As...", shift + cmd + "S", hasSong, false, [this] { saveAs(); });
             add("Export...", cmd + "E", hasSong, false, [this] { ExportPanel::show(session_, theme_); });
+            {
+                const int open = hasSong ? ynot::unclearedCount(session_.project()) : 0;
+                add(open > 0 ? "Sample Clearance... (" + juce::String(open) + " not cleared)" : juce::String("Sample Clearance..."), {},
+                    hasSong, false, [this] { ClearancePanel::show(session_, theme_); });
+            }
+            add("Ynot Sound Packs...", {}, hasSong, false, [this] {
+                SoundPacksPanel::show(session_, theme_, [this](const std::string& id) { openSampler(id); });
+            });
             m.addSeparator();
             add("Import Audio...", cmd + "I", hasSong, false, [this] { importAudio({}); });
             add("Audio Interface...", {}, true, false, [this] { showAudioSettings(); });
@@ -926,6 +938,9 @@ void MainComponent::addTrackItems(juce::PopupMenu& m) {
     });
     m.addItem("Sampler track (Ynot Sampler: chop a sample onto pads)...", session_.hasProject(), false,
               [this] { newSamplerTrack(); });
+    m.addItem("Sound from Ynot Packs (royalty-free)...", session_.hasProject(), false, [this] {
+        SoundPacksPanel::show(session_, theme_, [this](const std::string& id) { openSampler(id); });
+    });
 }
 
 void MainComponent::addPluginItems(juce::PopupMenu& m) {
@@ -1047,6 +1062,8 @@ void MainComponent::newSamplerTrack() {
 void MainComponent::addAiItems(juce::PopupMenu& m) {
     const bool hasSong = session_.hasProject();
     m.addSectionHeader("Ynot AI (runs on this device)");
+    m.addItem("Make an Original Idea from a Reference Song...", hasSong, false,
+              [this] { InspirePanel::chooseReferenceAndShow(session_, theme_); });
     m.addItem("Detect Key & Chords...", hasSong, false, [this] { AiResultsPanel::detectKeyAndChords(session_, theme_); });
     m.addItem("Show Chords on the Timeline", !session_.shownChords().empty(), !session_.shownChords().empty(),
               [this] { session_.setShownChords({}); });

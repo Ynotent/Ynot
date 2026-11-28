@@ -42,6 +42,9 @@ add_library(ynot_core STATIC
     core/src/stretch.cpp
     core/src/sampler.cpp
     core/src/analysis.cpp
+    core/src/clearance.cpp
+    core/src/inspire.cpp
+    core/src/packs.cpp
     core/src/drums.cpp
     core/src/pitch_correct.cpp
 )
@@ -93,6 +96,9 @@ if(YNOT_BUILD_TESTS)
         core/tests/test_stretch.cpp
         core/tests/test_sampler.cpp
         core/tests/test_analysis.cpp
+        core/tests/test_clearance.cpp
+        core/tests/test_inspire.cpp
+        core/tests/test_packs.cpp
         core/tests/test_tempo.cpp
         core/tests/test_loop.cpp
         core/tests/test_mixer.cpp

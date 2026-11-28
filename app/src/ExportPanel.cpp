@@ -1,5 +1,7 @@
 #include "ExportPanel.h"
 
+#include "CreatorPanels.h"
+
 namespace ynotapp {
 
 namespace {
@@ -66,6 +68,16 @@ ExportPanel::ExportPanel(Session& session, const Theme& theme) : session_(sessio
     for (size_t i = 0; i < std::size(kRates); ++i)
         if (std::abs(kRates[i] - session_.sampleRate()) < 0.5) rateId = static_cast<int>(i) + 1;
     rate_.setSelectedId(rateId, juce::dontSendNotification);
+    // Sample clearance reminder: outside samples need permission before a release.
+    if (const int open = session_.hasProject() ? ynot::unclearedCount(session_.project()) : 0; open > 0) {
+        clearance_.setText(juce::String(open) + " sample" + (open == 1 ? " isn't" : "s aren't") +
+                               " cleared yet. Fine for demos; clear them before releasing.",
+                           juce::dontSendNotification);
+        clearance_.setColour(juce::Label::textColourId, theme.accent);
+        addAndMakeVisible(clearance_);
+        reviewSamples_.onClick = [this] { ClearancePanel::show(session_, theme_); };
+        addAndMakeVisible(reviewSamples_);
+    }
     rate_.onChange = [this] { updateQualityChoices(); };
     range_.addItem("Whole song", 1);
     range_.addItem("Loop only (exact length, no tail)", 2);
@@ -86,7 +98,7 @@ ExportPanel::ExportPanel(Session& session, const Theme& theme) : session_(sessio
         if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(0);
     };
     updateQualityChoices();
-    setSize(460, 330);
+    setSize(clearance_.isVisible() ? 540 : 460, clearance_.isVisible() ? 370 : 330);
 }
 
 ExportSettings ExportPanel::settings() const {
@@ -174,6 +186,12 @@ void ExportPanel::resized() {
     row(rangeLabel_, range_);
     normalize_.setBounds(r.removeFromTop(26));
     auto buttons = r.removeFromBottom(32);
+    if (clearance_.isVisible()) {
+        r.removeFromBottom(6);
+        auto warn = r.removeFromBottom(28);
+        reviewSamples_.setBounds(warn.removeFromRight(140));
+        clearance_.setBounds(warn);
+    }
     cancel_.setBounds(buttons.removeFromRight(100));
     buttons.removeFromRight(8);
     export_.setBounds(buttons.removeFromRight(120));

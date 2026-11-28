@@ -32,6 +32,21 @@ struct MediaRef {
     std::string origin;       // "recording", "import", "freeze", "bounce"
 };
 
+// Where a piece of outside audio came from and whether it's cleared for release (see
+// clearance.hpp). Keyed by the media it describes.
+enum class ClearanceStatus { Unknown, Original, RoyaltyFree, Requested, Cleared, Denied };
+struct SampleCredit {
+    std::string mediaId;
+    std::string fileName;     // what the user imported ("break.wav"), for recognising it
+    std::string title, artist;
+    std::string masterOwner;  // owner of the recording (usually the label)
+    std::string publisher;    // owner of the song (writers' publisher)
+    std::string sourceTime;   // where in the original it's from ("1:32-1:36")
+    std::string license;      // licence or agreement reference
+    std::string notes;
+    ClearanceStatus status = ClearanceStatus::Unknown;
+};
+
 struct AudioClip {
     std::string id;
     std::string mediaId;
@@ -167,6 +182,7 @@ struct Project {
     double masterGainDb = 0.0;      // master fader
     std::vector<Track> tracks;
     std::vector<MediaRef> media;
+    std::vector<SampleCredit> credits;  // sample clearance (outside audio only)
     Json extras = Json::object();
 
     Track* findTrack(const std::string& id);

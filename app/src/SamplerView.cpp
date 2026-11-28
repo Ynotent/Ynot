@@ -14,7 +14,9 @@ SamplerView::SamplerView(Session& session, const Theme& theme) : session_(sessio
     hint_.setColour(juce::Label::textColourId, theme.textMuted);
     hint_.setFont(juce::FontOptions(theme.bodySize - 1.f));
     addAndMakeVisible(hint_);
-    for (auto* b : {&load_, &autoChop_, &newTrack_}) addAndMakeVisible(*b);
+    for (auto* b : {&load_, &autoChop_, &newTrack_, &packs_}) addAndMakeVisible(*b);
+    packs_.setTooltip("Ynot's own royalty-free hits, breaks and loops");
+    packs_.onClick = [this] { if (onRequestPacks) onRequestPacks(); };
     load_.onClick = [this] { loadSample(); };
     newTrack_.onClick = [this] { if (onRequestNewSampler) onRequestNewSampler(); };
     autoChop_.setTooltip("Find each hit or note and put it on its own pad");
@@ -170,6 +172,8 @@ void SamplerView::resized() {
     auto r = getLocalBounds().reduced(10, 8);
     auto top = r.removeFromTop(28);
     newTrack_.setBounds(top.removeFromRight(130));
+    top.removeFromRight(6);
+    packs_.setBounds(top.removeFromRight(120));
     top.removeFromRight(6);
     load_.setBounds(top.removeFromRight(120));
     top.removeFromRight(6);

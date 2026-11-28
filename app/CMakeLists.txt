@@ -14,6 +14,7 @@ set(YNOT_APP_SOURCES
     src/MidiControl.cpp
     src/SamplerView.cpp
     src/AiPanel.cpp
+    src/CreatorPanels.cpp
     src/MidiClock.cpp
     src/MainComponent.cpp
     src/ArrangeView.cpp

@@ -238,7 +238,22 @@ Done so far (built and tested on the Linux dev host only):
   audio-to-MIDI for one-note-at-a-time parts (voice, bass, lead) onto a new Ynot Synth
   track. Plain DSP, no network or model download; runs in the background. Drum and
   chopped-sampler tracks are left out of key/chord analysis.
-- Verified for all of the above: core unit tests (115) and app smoke tests on Linux, plus
+- **Sample clearance (File > Sample Clearance):** every source in the song listed with where
+  it's used, how long, and from when; imports and samples start "Not cleared yet", own
+  recordings / Ynot ideas / Ynot pack sounds don't need clearing; owners (master + publisher),
+  source time, licence and status per sample; stretched clips and chops trace back to their
+  original; CSV clearance sheet; Export warns about uncleared samples.
+- **Original idea from a reference (AI > Make an Original Idea...):** the reference is
+  analysed for tempo, key, chord movement and feel, then discarded; Ynot writes new chords,
+  bass, melody and drums (seeded, same result on every platform); the melody is compared with
+  the reference's top line (transposition/tempo independent) and regenerated if too close;
+  the window says when the reference melody couldn't be heard. Add as editable tracks or as
+  a sampler sample (credited as original, with a note of the reference). Deliberately not a
+  tool for disguising someone else's recording or melody.
+- **Ynot Sound Packs:** 28 generated sounds (drum hits, 808, sub, breaks at 84-150 BPM,
+  melodic loops and full ideas with key/tempo), preview player, add to Sampler or as a clip;
+  credited royalty-free automatically.
+- Verified for all of the above: core unit tests (122) and app smoke tests on Linux, plus
   UI checks on a virtual display. Not yet verified by ear or on real interfaces: the drum
   sounds, Ynot Tune on real vocals, a real MPK25, the sampler and AI on real recordings, M4A/MP3 encoding on real Macs/PCs, multi-channel
   interfaces, and buffer/rate changes on hardware.

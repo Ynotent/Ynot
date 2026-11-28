@@ -810,6 +810,8 @@ juce::String Session::newSamplerFromFileNow(const juce::File& file, std::string&
     edit([&](ynot::Project& p) {
         trackId = ynot::addSamplerTrack(p, dir_.getFullPathName().toStdString(), decoded.audio,
                                         file.getFileNameWithoutExtension().toStdString());
+        if (const auto* s = ynot::samplerOf(p, trackId))
+            ynot::noteImportedFile(p, s->params.getString("mediaId", ""), file.getFileName().toStdString());
     });
     return {};
 }
@@ -826,6 +828,8 @@ void Session::newSamplerFromFile(const juce::File& file, std::function<void(cons
                         edit([&](ynot::Project& p) {
                             id = ynot::addSamplerTrack(p, dir_.getFullPathName().toStdString(), d.audio,
                                                        file.getFileNameWithoutExtension().toStdString());
+                            if (const auto* s = ynot::samplerOf(p, id))
+                                ynot::noteImportedFile(p, s->params.getString("mediaId", ""), file.getFileName().toStdString());
                         });
                         done({}, id);
                     });
@@ -834,12 +838,16 @@ void Session::newSamplerFromFile(const juce::File& file, std::function<void(cons
 void Session::loadSampleFile(const std::string& trackId, const juce::File& file, std::function<void(const juce::String&)> done) {
     if (!loaded_) return;
     runInBackground([file] { return decodeAudioFile(file); },
-                    [this, trackId, done](DecodedAudio d) {
+                    [this, trackId, file, done](DecodedAudio d) {
                         if (!d.ok) {
                             done(d.error);
                             return;
                         }
-                        edit([&](ynot::Project& p) { ynot::loadSample(p, dir_.getFullPathName().toStdString(), trackId, d.audio); });
+                        edit([&](ynot::Project& p) {
+                            ynot::loadSample(p, dir_.getFullPathName().toStdString(), trackId, d.audio);
+                            if (const auto* s = ynot::samplerOf(p, trackId))
+                                ynot::noteImportedFile(p, s->params.getString("mediaId", ""), file.getFileName().toStdString());
+                        });
                         done({});
                     });
 }
@@ -850,8 +858,114 @@ std::string Session::sendClipToSampler(const std::string& trackId, const std::st
     if (audio.frames() <= 0) return {};
     const auto* t = project_.findTrack(trackId);
     const std::string name = (t ? t->name : std::string("Clip")) + " chops";
+    std::string root;
+    if (const auto* t = project_.findTrack(trackId))
+        for (const auto& c : t->audioClips)
+            if (c.id == clipId) root = c.stretchSourceMediaId.empty() ? c.mediaId : c.stretchSourceMediaId;
     std::string id;
-    edit([&](ynot::Project& p) { id = ynot::addSamplerTrack(p, dir_.getFullPathName().toStdString(), audio, name); });
+    edit([&](ynot::Project& p) {
+        id = ynot::addSamplerTrack(p, dir_.getFullPathName().toStdString(), audio, name);
+        // The chop comes from that audio: it carries the same owners and clearance.
+        if (const auto* s = ynot::samplerOf(p, id); s && !root.empty())
+            ynot::inheritCredit(p, s->params.getString("mediaId", ""), root);
+    });
+    return id;
+}
+
+// ---------------------------------------------------------------- preview, clearance, ideas, packs
+
+void Session::previewAudio(ynot::AudioBuffer audio) {
+    if (audio.frames() <= 0) return;
+    if (std::abs(audio.sampleRate - sampleRate_) > 0.5) {  // linear resample to the device rate
+        ynot::AudioBuffer r;
+        r.sampleRate = sampleRate_;
+        r.channels = audio.channels;
+        const double ratio = audio.sampleRate / sampleRate_;
+        const auto n = static_cast<int64_t>(static_cast<double>(audio.frames()) / ratio);
+        r.samples.resize(static_cast<size_t>(n * r.channels));
+        for (int64_t f = 0; f < n; ++f) {
+            const double src = static_cast<double>(f) * ratio;
+            const auto i = std::min<int64_t>(static_cast<int64_t>(src), audio.frames() - 1);
+            const auto j = std::min<int64_t>(i + 1, audio.frames() - 1);
+            const auto fr = static_cast<float>(src - static_cast<double>(i));
+            for (int c = 0; c < r.channels; ++c)
+                r.samples[static_cast<size_t>(f * r.channels + c)] =
+                    audio.samples[static_cast<size_t>(i * audio.channels + c)] * (1 - fr) +
+                    audio.samples[static_cast<size_t>(j * audio.channels + c)] * fr;
+        }
+        audio = std::move(r);
+    }
+    previewKeep_.push_back(std::make_unique<ynot::AudioBuffer>(std::move(audio)));
+    previewPos_ = 0;
+    previewBuf_ = previewKeep_.back().get();
+    // Older buffers can go once the audio thread has certainly moved on to the new one.
+    while (previewKeep_.size() > 3) previewKeep_.erase(previewKeep_.begin());
+}
+
+void Session::stopPreview() { previewBuf_ = nullptr; }
+
+void Session::setCredit(const ynot::SampleCredit& c) {
+    edit([&](ynot::Project& p) { ynot::setCredit(p, c); });
+}
+
+juce::String Session::exportClearanceSheet(const juce::File& csv) const {
+    if (!loaded_) return "No song open.";
+    return csv.replaceWithText(juce::String(ynot::clearanceSheetCsv(project_))) ? juce::String()
+                                                                                : "Couldn't write " + csv.getFullPathName();
+}
+
+void Session::analyzeReferenceFile(const juce::File& file,
+                                   std::function<void(const ynot::ReferenceProfile&, const juce::String&)> done) {
+    runInBackground(
+        [file] {
+            std::pair<ynot::ReferenceProfile, juce::String> r;
+            const auto d = decodeAudioFile(file);
+            if (!d.ok) r.second = d.error;
+            else r.first = ynot::analyzeReference(d.audio);  // the audio itself is dropped here
+            return r;
+        },
+        [done](std::pair<ynot::ReferenceProfile, juce::String> r) { done(r.first, r.second); });
+}
+
+std::vector<std::string> Session::addIdea(const ynot::InspiredIdea& idea, bool useIdeaTempo, const std::string& referenceName) {
+    std::vector<std::string> ids;
+    const int64_t at = positionTick() / std::max<int64_t>(1, project_.barTicks()) * project_.barTicks();
+    edit([&](ynot::Project& p) {
+        ids = ynot::addIdeaTracks(p, idea, at, useIdeaTempo);
+        juce::ignoreUnused(referenceName);
+    });
+    return ids;
+}
+
+std::string Session::ideaToSampler(const ynot::InspiredIdea& idea, const std::string& referenceName) {
+    const auto audio = ynot::renderIdea(idea, sampleRate_);
+    std::string id;
+    edit([&](ynot::Project& p) {
+        id = ynot::addSamplerTrack(p, dir_.getFullPathName().toStdString(), audio, "Idea sample");
+        if (const auto* s = ynot::samplerOf(p, id)) {
+            ynot::SampleCredit c;
+            c.mediaId = s->params.getString("mediaId", "");
+            c.fileName = "Ynot idea: " + idea.description;
+            c.title = "Original idea (Ynot)";
+            c.status = ynot::ClearanceStatus::Original;
+            c.notes = "Written by Ynot from scratch in the style of \"" + referenceName + "\" (tempo, key, feel only). " +
+                      "Melody similarity to the reference: " + std::to_string(static_cast<int>(std::lround(idea.similarity * 100))) + "%.";
+            ynot::setCredit(p, c);
+        }
+    });
+    return id;
+}
+
+std::string Session::addPackSoundToSampler(const std::string& soundId) {
+    std::string id;
+    edit([&](ynot::Project& p) { id = ynot::addPackSoundToSampler(p, dir_.getFullPathName().toStdString(), soundId, sampleRate_); });
+    return id;
+}
+
+std::string Session::addPackSoundAsClip(const std::string& soundId) {
+    std::string id;
+    const int64_t at = positionTick();
+    edit([&](ynot::Project& p) { id = ynot::addPackSoundAsClip(p, dir_.getFullPathName().toStdString(), soundId, {}, at, sampleRate_); });
     return id;
 }
 
@@ -953,7 +1067,12 @@ juce::String Session::commitImport(const juce::File& file, const DecodedAudio& d
         const auto* t = p.findTrack(target);
         if (!t || t->kind != ynot::TrackKind::Audio)
             target = ynot::addTrack(p, ynot::TrackKind::Audio, file.getFileNameWithoutExtension().toStdString());
-        ok = !ynot::importAudioClip(p, dir_.getFullPathName().toStdString(), target, decoded.audio, startTick).empty();
+        const auto clipId = ynot::importAudioClip(p, dir_.getFullPathName().toStdString(), target, decoded.audio, startTick);
+        ok = !clipId.empty();
+        // Remember which file it was, for sample clearance.
+        if (const auto* t = ok ? p.findTrack(target) : nullptr)
+            for (const auto& c : t->audioClips)
+                if (c.id == clipId) ynot::noteImportedFile(p, c.mediaId, file.getFileName().toStdString());
     });
     save();  // the media file is already in the package; keep project.json in step
     return ok ? juce::String() : juce::String("Couldn't add the audio to the project.");
@@ -1108,6 +1227,17 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
     } else {
         juce::FloatVectorOperations::clear(l, frames);
         juce::FloatVectorOperations::clear(r, frames);
+    }
+    if (const auto* pv = previewBuf_.load()) {  // preview player (pack sounds, ideas)
+        int64_t pos = previewPos_.load();
+        const int ch = pv->channels;
+        int i = 0;
+        for (; i < frames && pos < pv->frames(); ++i, ++pos) {
+            l[i] += pv->samples[static_cast<size_t>(pos * ch)];
+            r[i] += pv->samples[static_cast<size_t>(pos * ch + (ch > 1 ? 1 : 0))];
+        }
+        previewPos_ = pos;
+        if (pos >= pv->frames()) previewBuf_.compare_exchange_strong(pv, nullptr);
     }
     for (int c = 0; c < numOuts; ++c)
         if (c != base && c != base + 1) juce::FloatVectorOperations::clear(outs[c], frames);

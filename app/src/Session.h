@@ -246,6 +246,25 @@ public:
     // Same as the file versions, synchronously (tests).
     juce::String newSamplerFromFileNow(const juce::File& file, std::string& trackId);
 
+    // ---- Preview player (pack sounds, ideas): plays over everything, transport or not.
+    void previewAudio(ynot::AudioBuffer audio);  // resampled to the device rate
+    void stopPreview();
+    bool isPreviewing() const { return previewBuf_.load() != nullptr; }
+
+    // ---- Sample clearance
+    void setCredit(const ynot::SampleCredit& c);  // undoable
+    juce::String exportClearanceSheet(const juce::File& csv) const;  // error, or empty
+
+    // ---- "Inspired by": analyse a reference song (background), then add original ideas.
+    void analyzeReferenceFile(const juce::File& file,
+                              std::function<void(const ynot::ReferenceProfile&, const juce::String& error)> done);
+    std::vector<std::string> addIdea(const ynot::InspiredIdea& idea, bool useIdeaTempo, const std::string& referenceName);
+    std::string ideaToSampler(const ynot::InspiredIdea& idea, const std::string& referenceName);
+
+    // ---- Ynot sound packs
+    std::string addPackSoundToSampler(const std::string& soundId);
+    std::string addPackSoundAsClip(const std::string& soundId);  // new audio track, at the playhead
+
     // Hardware controllers: MIDI Learn mappings, transport buttons (MMC) and MIDI clock out.
     MidiControlMap& midiControls() { return *midiControls_; }
     void setMidiClockOut(bool on);
@@ -303,6 +322,11 @@ private:
     static constexpr int kMaxLiveMidi = 512;
     juce::MidiMessageCollector collector_;
     std::vector<ynot::ChordSpan> shownChords_;
+    // Preview: the audio thread reads previewBuf_; buffers stay alive in previewKeep_ until a
+    // later preview replaces them (never freed while the audio thread could be reading them).
+    std::atomic<const ynot::AudioBuffer*> previewBuf_{nullptr};
+    std::atomic<int64_t> previewPos_{0};
+    std::vector<std::unique_ptr<ynot::AudioBuffer>> previewKeep_;
     // Background jobs hold this; it's cleared on destruction so late results are dropped.
     std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
     template <typename Work, typename Then>

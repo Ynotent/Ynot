@@ -1,4 +1,5 @@
 #include "ynot/project_format.hpp"
+#include "ynot/clearance.hpp"
 
 #include <filesystem>
 #include <stdexcept>
@@ -13,7 +14,7 @@ namespace {
 // verbatim in `extras` and written back on save.
 const std::vector<std::string> kProjectKeys = {
     "format", "formatVersion", "id", "name", "tempoBpm", "tempoChanges", "loop", "masterGainDb", "timeSignature",
-    "sampleRateHint", "tracks", "media"};
+    "sampleRateHint", "tracks", "media", "credits"};
 const std::vector<std::string> kTrackKeys = {
     "id", "name", "kind", "order", "gainDb", "pan", "mute", "solo", "armed", "color",
     "instrument", "inserts", "audioClips", "midiClips", "automation", "freeze", "frozen"};
@@ -342,6 +343,20 @@ Json projectToJson(const Project& p) {
     Json media = Json::array();
     for (auto& m : p.media) media.push(mediaToJson(m));
     j["media"] = media;
+    if (!p.credits.empty()) {
+        Json credits = Json::array();
+        for (const auto& c : p.credits) {
+            Json cj = Json::object();
+            cj["mediaId"] = c.mediaId;
+            cj["status"] = clearanceStatusId(c.status);
+            for (auto [k, v] : {std::pair<const char*, const std::string*>{"fileName", &c.fileName}, {"title", &c.title},
+                                {"artist", &c.artist}, {"masterOwner", &c.masterOwner}, {"publisher", &c.publisher},
+                                {"sourceTime", &c.sourceTime}, {"license", &c.license}, {"notes", &c.notes}})
+                if (!v->empty()) cj[k] = *v;
+            credits.push(cj);
+        }
+        j["credits"] = credits;
+    }
     appendExtras(j, p.extras);
     return j;
 }
@@ -383,6 +398,22 @@ Project projectFromJson(const Json& input) {
         for (auto& tj : tr->asArray()) p.tracks.push_back(trackFromJson(tj));
     if (auto* md = j.find("media"); md && md->isArray())
         for (auto& mj : md->asArray()) p.media.push_back(mediaFromJson(mj));
+    if (auto* cr = j.find("credits"); cr && cr->isArray())
+        for (auto& cj : cr->asArray()) {
+            if (!cj.isObject()) continue;
+            SampleCredit c;
+            c.mediaId = cj.getString("mediaId", "");
+            c.status = clearanceStatusFromId(cj.getString("status", "unknown"));
+            c.fileName = cj.getString("fileName", "");
+            c.title = cj.getString("title", "");
+            c.artist = cj.getString("artist", "");
+            c.masterOwner = cj.getString("masterOwner", "");
+            c.publisher = cj.getString("publisher", "");
+            c.sourceTime = cj.getString("sourceTime", "");
+            c.license = cj.getString("license", "");
+            c.notes = cj.getString("notes", "");
+            if (!c.mediaId.empty()) p.credits.push_back(c);
+        }
     p.extras = collectExtras(j, kProjectKeys);
     return p;
 }
