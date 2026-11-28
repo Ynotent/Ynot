@@ -81,6 +81,17 @@ public:
     };
     RecordResult stopRecording();
     bool isRecording() const { return recording_.load(); }
+    // Live waveform of a recording in progress, for drawing while it records (message thread).
+    // Peaks are min/max of the track's input over kLivePeakFrames each; firstFrame is the
+    // timeline frame of peak 0. With cycle recording, only the current pass is returned.
+    static constexpr int kLivePeakFrames = 256;
+    struct LiveWave {
+        const float* lo = nullptr;
+        const float* hi = nullptr;
+        int count = 0;
+        int64_t firstFrame = 0;
+    };
+    LiveWave liveWaveform(const std::string& trackId) const;
     double recordingSeconds() const;
     int64_t recordStartTick() const { return ynot::frameToTick(project_, recordStart_, sampleRate_); }
     int64_t recordEndTick() const {
@@ -251,6 +262,19 @@ private:
     // jumps, so pass k of a cycle recording is at loop start + k * loop length.
     std::atomic<int64_t> recordClock_{0};
     bool cycleActive_ = false;  // this recording is a cycle recording
+    int64_t cycleLoopFrames_ = 0;
+    // Live waveform buffers: allocated when recording starts (message thread), filled by the
+    // audio thread, read by the UI; `count` publishes how many peaks are complete.
+    struct LivePeaks {
+        std::string trackId;
+        std::vector<int> channels;
+        std::vector<float> lo, hi;
+        std::atomic<int> count{0};
+        float curLo = 0, curHi = 0;
+        int curN = 0;
+    };
+    std::vector<std::unique_ptr<LivePeaks>> livePeaks_;
+    void captureLivePeaks(const float* const* ins, int numIns, int frames, int64_t clock);
     void applyLoopToEngine(ynot::Engine& e) const;
     void pushMixToEngine();
     int64_t recordEnd_ = std::numeric_limits<int64_t>::max();

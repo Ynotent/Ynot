@@ -375,6 +375,32 @@ public:
                                               static_cast<float>(lane.getHeight() - 6));
                     g.setColour(th.record.withAlpha(0.28f));
                     g.fillRoundedRectangle(rr, 4.f);
+                    // The waveform being recorded, drawn as it comes in.
+                    const auto wave = owner_.session_.liveWaveform(row.track->id);
+                    if (wave.count > 0) {
+                        const ynot::TempoMap tempo(owner_.session_.project());
+                        const double sr = owner_.session_.sampleRate();
+                        const float mid = rr.getCentreY(), half = rr.getHeight() / 2.f - 3.f;
+                        g.setColour(th.text.withAlpha(0.85f));
+                        // Peaks per pixel: find the frame range of each pixel column.
+                        const int px0 = static_cast<int>(std::max(x0, static_cast<float>(lane.getX())));
+                        const int px1 = static_cast<int>(std::min(x1, static_cast<float>(lane.getRight())));
+                        for (int px = px0; px < px1; ++px) {
+                            auto peakAt = [&](int x) {
+                                const double frame = tempo.tickToSeconds(static_cast<double>(owner_.xToTick(x))) * sr;
+                                return static_cast<int>((frame - static_cast<double>(wave.firstFrame)) /
+                                                        Session::kLivePeakFrames);
+                            };
+                            const int a = std::max(0, peakAt(px)), b = std::min(wave.count, std::max(a + 1, peakAt(px + 1)));
+                            float lo = 0, hi = 0;
+                            for (int k = a; k < b; ++k) {
+                                lo = std::min(lo, wave.lo[k]);
+                                hi = std::max(hi, wave.hi[k]);
+                            }
+                            if (b > a)
+                                g.drawVerticalLine(px, mid - std::min(hi, 1.f) * half, mid - std::max(lo, -1.f) * half + 1.f);
+                        }
+                    }
                     g.setColour(th.record);
                     g.drawRoundedRectangle(rr.reduced(0.5f), 4.f, 1.5f);
                 }

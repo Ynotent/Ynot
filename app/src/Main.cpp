@@ -78,6 +78,14 @@ static int runSmokeTest(const juce::File& dir) {
             session.processForTesting(ins, 2, outs, 2, block);
         }
     }
+    {   // While recording, the waveform is available to draw: 1 s of the tone after the count-in.
+        const auto wave = session.liveWaveform(vocalsId);
+        float top = 0, bottom = 0;
+        for (int k = 0; k < wave.count; ++k) top = std::max(top, wave.hi[k]), bottom = std::min(bottom, wave.lo[k]);
+        expect(std::abs(wave.count - 48000 / Session::kLivePeakFrames) <= 2 && std::abs(top - 0.5f) < 0.01f &&
+                   std::abs(bottom + 0.5f) < 0.01f,
+               "the recording's waveform is drawn live (peaks follow the input while recording)");
+    }
     const size_t clipsBefore = session.project().findTrack(vocalsId)->audioClips.size();
     auto rec = session.stopRecording();
     const auto* vox = session.project().findTrack(vocalsId);
@@ -645,7 +653,8 @@ static int runSmokeTest(const juce::File& dir) {
 // with no sound card). Same thread model as a real device: a separate high-priority thread.
 class SimulatedAudio : private juce::HighResolutionTimer {
 public:
-    explicit SimulatedAudio(Session& s) : session_(s), in_(256, 0.f), outL_(256), outR_(256) {
+    // `inputTone`: feed a varying test tone into the inputs (to see recording waveforms).
+    SimulatedAudio(Session& s, bool inputTone) : session_(s), tone_(inputTone), in_(256, 0.f), outL_(256), outR_(256) {
         session_.simulateInputsForTesting(2);
         startTimer(5);  // ~256 frames at 48 kHz per 5.3 ms
     }
@@ -653,11 +662,18 @@ public:
 
 private:
     void hiResTimerCallback() override {
+        if (tone_)
+            for (int i = 0; i < 240; ++i, ++t_) {
+                const double env = 0.5 + 0.45 * std::sin(t_ / 48000.0 * 2.0);  // swells, like a voice
+                in_[static_cast<size_t>(i)] = static_cast<float>(0.6 * env * std::sin(t_ * 2 * 3.14159265 * 220.0 / 48000.0));
+            }
         const float* ins[2] = {in_.data(), in_.data()};
         float* outs[2] = {outL_.data(), outR_.data()};
         session_.processForTesting(ins, 2, outs, 2, 240);  // 240 frames = 5 ms at 48 kHz
     }
     Session& session_;
+    bool tone_;
+    int64_t t_ = 0;
     std::vector<float> in_, outL_, outR_;
 };
 
@@ -779,7 +795,7 @@ public:
             });
             return;
         }
-        if (args.contains("--simulate-audio")) simulated_ = std::make_unique<SimulatedAudio>(*session_);
+        if (args.contains("--simulate-audio")) simulated_ = std::make_unique<SimulatedAudio>(*session_, args.contains("--simulate-input-tone"));
         else session_->startAudio();  // default device; the user can change it in Audio settings
     }
 

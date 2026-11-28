@@ -517,6 +517,18 @@ bool Session::startRecording(std::string& error) {
     punchActive_ = punch;
     cycleActive_ = cycle;
     recordClock_ = recordStart - preRoll;
+    cycleLoopFrames_ = cycle ? ynot::tickToFrame(project_, project_.loop.endTick, sampleRate_) - recordStart : 0;
+    // Live waveform buffers: room for 30 minutes per armed track (the drawing simply stops after).
+    livePeaks_.clear();
+    for (const auto& target : cfg.targets) {
+        auto lp = std::make_unique<LivePeaks>();
+        lp->trackId = target.trackId;
+        lp->channels = target.inputChannels;
+        const auto capacity = static_cast<size_t>(sampleRate_ * 1800.0 / kLivePeakFrames);
+        lp->lo.assign(capacity, 0.f);
+        lp->hi.assign(capacity, 0.f);
+        livePeaks_.push_back(std::move(lp));
+    }
     forcedClickUntil_ = countIn > 0 ? recordStart : std::numeric_limits<int64_t>::min();
     position_ = recordStart - preRoll;
     rebuild();  // engine starts at the pre-roll position with the count-in click
@@ -794,7 +806,10 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
     // recording doesn't (cycle passes follow each other in the take).
     const bool capturing = engine && (recordingAudio_.load() || recordingMidi_.load());
     const int64_t clock = recordClock_.load();
-    if (engine && recordingAudio_.load()) recorder_.capture(ins, numIns, frames, clock);
+    if (engine && recordingAudio_.load()) {
+        recorder_.capture(ins, numIns, frames, clock);
+        captureLivePeaks(ins, numIns, frames, clock);
+    }
     if (engine && recordingMidi_.load()) midiRecorder_.capture(liveMidi_.data(), numLive, clock);
     if (capturing) recordClock_ = clock + frames;
     for (int c = 0; c < std::min(numIns, kMaxMeteredInputs); ++c)
@@ -836,6 +851,57 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
     for (int c = 0; c < numOuts; ++c)
         if (c != base && c != base + 1) juce::FloatVectorOperations::clear(outs[c], frames);
     inCallback_ = false;
+}
+
+void Session::captureLivePeaks(const float* const* ins, int numIns, int frames, int64_t clock) {
+    for (auto& lpPtr : livePeaks_) {
+        auto& lp = *lpPtr;
+        int n = lp.count.load(std::memory_order_relaxed);
+        for (int i = 0; i < frames; ++i) {
+            const int64_t f = clock + i;
+            if (f < recordStart_ || f >= recordEnd_) continue;  // count-in / after punch-out
+            float lo = 0, hi = 0;
+            for (int ch : lp.channels)
+                if (ch >= 0 && ch < numIns && ins[ch]) {
+                    lo = std::min(lo, ins[ch][i]);
+                    hi = std::max(hi, ins[ch][i]);
+                }
+            if (lp.curN == 0) lp.curLo = lo, lp.curHi = hi;
+            lp.curLo = std::min(lp.curLo, lo);
+            lp.curHi = std::max(lp.curHi, hi);
+            if (++lp.curN == kLivePeakFrames) {
+                if (n < static_cast<int>(lp.lo.size())) {
+                    lp.lo[static_cast<size_t>(n)] = lp.curLo;
+                    lp.hi[static_cast<size_t>(n)] = lp.curHi;
+                    ++n;
+                }
+                lp.curN = 0;
+            }
+        }
+        lp.count.store(n, std::memory_order_release);
+    }
+}
+
+Session::LiveWave Session::liveWaveform(const std::string& trackId) const {
+    LiveWave w;
+    if (!recording_.load()) return w;
+    for (const auto& lp : livePeaks_) {
+        if (lp->trackId != trackId) continue;
+        const int count = lp->count.load(std::memory_order_acquire);
+        int first = 0;
+        int64_t firstFrame = recordStart_;
+        if (cycleActive_ && cycleLoopFrames_ > 0) {  // only the pass being recorded now
+            const int64_t pass = static_cast<int64_t>(count) * kLivePeakFrames / cycleLoopFrames_;
+            first = static_cast<int>(pass * cycleLoopFrames_ / kLivePeakFrames);
+            firstFrame = recordStart_ + static_cast<int64_t>(first) * kLivePeakFrames - pass * cycleLoopFrames_;
+        }
+        w.lo = lp->lo.data() + first;
+        w.hi = lp->hi.data() + first;
+        w.count = count - first;
+        w.firstFrame = firstFrame;
+        return w;
+    }
+    return w;
 }
 
 ynot::CompatReport Session::compatibilityFor(ynot::Platform target) const {
