@@ -87,4 +87,38 @@ std::optional<MidiClip> buildMidiClip(const Project& p, const std::vector<TimedM
     return clip;
 }
 
+std::optional<MidiClip> buildCycleMidiClip(const Project& p, const std::vector<TimedMidiEvent>& events,
+                                           int64_t loopStartFrame, int64_t loopEndFrame, int64_t stopFrame,
+                                           double sampleRate, const QuantizeSettings* quantize) {
+    const int64_t len = loopEndFrame - loopStartFrame;
+    if (len <= 0) return buildMidiClip(p, events, loopStartFrame, stopFrame, sampleRate, quantize);
+    std::vector<TimedMidiEvent> sorted = events;
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const TimedMidiEvent& a, const TimedMidiEvent& b) { return a.frame < b.frame; });
+    // Pair notes on the continuous clock, then fold each note into the loop.
+    std::vector<TimedMidiEvent> folded;
+    std::map<int, std::pair<int64_t, int>> held;  // pitch -> (on frame, velocity)
+    auto addNote = [&](int pitch, int64_t on, int64_t off, int velocity) {
+        if (on < loopStartFrame) return;  // played during the count-in
+        const int64_t at = loopStartFrame + (on - loopStartFrame) % len;
+        folded.push_back({at, true, pitch, velocity});
+        folded.push_back({std::min(at + std::max<int64_t>(1, off - on), loopEndFrame), false, pitch, 0});
+    };
+    for (const auto& e : sorted) {
+        auto it = held.find(e.pitch);
+        if (it != held.end()) {  // note-off, or a re-struck note ending the previous one
+            addNote(e.pitch, it->second.first, e.frame, it->second.second);
+            held.erase(it);
+        }
+        if (e.noteOn) held[e.pitch] = {e.frame, e.velocity};
+    }
+    for (const auto& [pitch, h] : held) addNote(pitch, h.first, stopFrame, h.second);  // still held at stop
+    // Same frame: note-offs first, so a note ending where another starts doesn't cut it.
+    std::stable_sort(folded.begin(), folded.end(), [](const TimedMidiEvent& a, const TimedMidiEvent& b) {
+        if (a.frame != b.frame) return a.frame < b.frame;
+        return !a.noteOn && b.noteOn;
+    });
+    return buildMidiClip(p, folded, loopStartFrame, loopEndFrame, sampleRate, quantize);
+}
+
 }  // namespace ynot

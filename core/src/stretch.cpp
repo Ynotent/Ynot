@@ -423,6 +423,8 @@ bool commitStretch(Project& p, const std::string& packageDir, const StretchJob& 
     const AudioClip* existing = findClipIn(p, job.trackId, job.clipId);
     if (!existing) return false;
     AudioClip c = *existing;
+    c.takeOffsets.clear();  // stretching uses the current take; the others refer to the old media
+    c.activeTake = 0;
     if (job.reset()) {
         const MediaRef* orig = p.findMedia(job.sourceMediaId);
         if (!orig) return false;

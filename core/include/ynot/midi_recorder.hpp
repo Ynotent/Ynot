@@ -56,4 +56,12 @@ std::optional<MidiClip> buildMidiClip(const Project& p, const std::vector<TimedM
                                       int64_t startFrame, int64_t stopFrame, double sampleRate,
                                       const QuantizeSettings* quantize = nullptr);
 
+// Cycle recording: `events` are timed on a continuous clock that began before the loop and
+// kept running across loop jumps (pass k starts at loopStartFrame + k * loop length).
+// Notes from every pass are merged into one clip covering the loop; notes held over the
+// loop end are cut there, and notes played before the loop start (count-in) are dropped.
+std::optional<MidiClip> buildCycleMidiClip(const Project& p, const std::vector<TimedMidiEvent>& events,
+                                           int64_t loopStartFrame, int64_t loopEndFrame, int64_t stopFrame,
+                                           double sampleRate, const QuantizeSettings* quantize = nullptr);
+
 }  // namespace ynot

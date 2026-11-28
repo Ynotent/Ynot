@@ -200,6 +200,16 @@ std::string importAudioClip(Project& p, const std::string& packageDir, const std
     return id;
 }
 
+bool selectTake(Project& p, const std::string& trackId, const std::string& clipId, int index) {
+    Track* t = p.findTrack(trackId);
+    AudioClip* c = t ? findAudio(*t, clipId) : nullptr;
+    if (!c || index < 0 || index >= static_cast<int>(c->takeOffsets.size())) return false;
+    const int64_t intoTake = c->sourceOffsetFrames - c->takeOffsets[static_cast<size_t>(c->activeTake)];
+    c->sourceOffsetFrames = std::max<int64_t>(0, c->takeOffsets[static_cast<size_t>(index)] + intoTake);
+    c->activeTake = index;
+    return true;
+}
+
 namespace {
 template <class F>
 void retempo(Project& p, F&& change) {

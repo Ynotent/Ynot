@@ -115,7 +115,7 @@ TEST("tempo edits: audio keeps its real length, clips stay on their bars, undo-a
     Track a;
     a.id = "a";
     a.kind = TrackKind::Audio;
-    a.audioClips = {{"c", "m", kBar, kBar, 0, 0.0, {}, 0, 1.0, {}}};  // bar 2, 2 s at 120 = 1 bar
+    a.audioClips = {{"c", "m", kBar, kBar, 0, 0.0, {}, 0, 1.0, {}, {}, 0}};  // bar 2, 2 s at 120 = 1 bar
     Track k;
     k.id = "k";
     k.kind = TrackKind::Instrument;

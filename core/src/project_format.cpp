@@ -12,7 +12,7 @@ namespace {
 // Keys this version understands, per object kind. Anything else is preserved
 // verbatim in `extras` and written back on save.
 const std::vector<std::string> kProjectKeys = {
-    "format", "formatVersion", "id", "name", "tempoBpm", "tempoChanges", "timeSignature",
+    "format", "formatVersion", "id", "name", "tempoBpm", "tempoChanges", "loop", "timeSignature",
     "sampleRateHint", "tracks", "media"};
 const std::vector<std::string> kTrackKeys = {
     "id", "name", "kind", "order", "gainDb", "pan", "mute", "solo", "armed", "color",
@@ -141,6 +141,13 @@ Json trackToJson(const Track& t) {
         cj["lengthTick"] = c.lengthTick;
         cj["sourceOffsetFrames"] = c.sourceOffsetFrames;
         cj["gainDb"] = c.gainDb;
+        if (!c.takeOffsets.empty()) {
+            Json tk = Json::object(), offs = Json::array();
+            for (auto o : c.takeOffsets) offs.push(o);
+            tk["offsets"] = offs;
+            tk["active"] = c.activeTake;
+            cj["takes"] = tk;
+        }
         if (!c.stretchSourceMediaId.empty()) {
             Json st = Json::object();
             st["sourceMediaId"] = c.stretchSourceMediaId;
@@ -217,6 +224,12 @@ Track trackFromJson(const Json& j) {
             c.lengthTick = cj.getInt("lengthTick", 0);
             c.sourceOffsetFrames = cj.getInt("sourceOffsetFrames", 0);
             c.gainDb = cj.getNumber("gainDb", 0);
+            if (auto* tk = cj.find("takes"); tk && tk->isObject()) {
+                if (auto* offs = tk->find("offsets"); offs && offs->isArray())
+                    for (auto& o : offs->asArray()) c.takeOffsets.push_back(o.asInt());
+                c.activeTake = static_cast<int>(tk->getInt("active", 0));
+                if (c.activeTake < 0 || c.activeTake >= static_cast<int>(c.takeOffsets.size())) c.activeTake = 0;
+            }
             if (auto* st = cj.find("stretch"); st && st->isObject()) {
                 c.stretchSourceMediaId = st->getString("sourceMediaId", "");
                 c.stretchSourceOffsetFrames = st->getInt("sourceOffsetFrames", 0);
@@ -272,6 +285,13 @@ Json projectToJson(const Project& p) {
     j["id"] = p.id;
     j["name"] = p.name;
     j["tempoBpm"] = p.tempoBpm;
+    if (p.loop.valid()) {
+        Json lp = Json::object();
+        lp["startTick"] = p.loop.startTick;
+        lp["endTick"] = p.loop.endTick;
+        lp["enabled"] = p.loop.enabled;
+        j["loop"] = lp;
+    }
     if (!p.tempoChanges.empty()) {
         Json tm = Json::array();
         for (const auto& c : p.tempoChanges) {
@@ -306,6 +326,11 @@ Project projectFromJson(const Json& input) {
     p.name = j.getString("name", "Untitled");
     p.tempoBpm = j.getNumber("tempoBpm", 120);
     if (p.tempoBpm < 10 || p.tempoBpm > 999) p.tempoBpm = 120;
+    if (auto* lp = j.find("loop"); lp && lp->isObject()) {
+        p.loop.startTick = std::max<int64_t>(0, lp->getInt("startTick", 0));
+        p.loop.endTick = lp->getInt("endTick", 0);
+        p.loop.enabled = lp->getBool("enabled", false) && p.loop.valid();
+    }
     if (auto* tm = j.find("tempoChanges"); tm && tm->isArray()) {
         for (auto& cj : tm->asArray()) {
             TempoChange c;

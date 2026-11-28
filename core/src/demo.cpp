@@ -50,7 +50,7 @@ Project makeDemoProject(const std::string& packageDir) {
     vox.name = "Vocals";
     vox.kind = TrackKind::Audio;
     vox.order = 1;
-    vox.audioClips.push_back({newId(), mediaId, 0, 4 * kTicksPerQuarter, 0, 0.0, {}, 0, 1.0, {}});
+    vox.audioClips.push_back({newId(), mediaId, 0, 4 * kTicksPerQuarter, 0, 0.0, {}, 0, 1.0, {}, {}, 0});
     auto gain = makeBuiltin(kBuiltinGain, "Gain");
     gain.params["gainDb"] = -3.0;
     vox.inserts.push_back(gain);

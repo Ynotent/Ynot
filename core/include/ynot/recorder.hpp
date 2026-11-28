@@ -100,6 +100,12 @@ private:
 //    played lines up with what the performer heard.
 //  * New clips replace overlapping parts of existing clips (classic punch-in).
 // Returns the ids of the new clips.
+// Cycle recording: each take is one continuous recording that began at the loop start and
+// kept running across loop jumps. Every pass becomes a take of one clip covering the loop
+// (the last complete pass is active; earlier passes can be chosen with selectTake()).
+std::vector<std::string> commitCycleTakes(Project& p, const std::string& packageDir,
+                                          const std::vector<RecordedTake>& takes, int latencyFrames,
+                                          int64_t loopStartTick, int64_t loopEndTick);
 std::vector<std::string> commitTakes(Project& p, const std::string& packageDir,
                                      const std::vector<RecordedTake>& takes, int latencyFrames);
 

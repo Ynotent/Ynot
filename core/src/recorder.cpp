@@ -266,6 +266,50 @@ void placeClipReplacing(const Project& p, Track& track, AudioClip clip) {
     track.audioClips = std::move(kept);
 }
 
+std::vector<std::string> commitCycleTakes(Project& p, const std::string& packageDir,
+                                          const std::vector<RecordedTake>& takes, int latencyFrames,
+                                          int64_t loopStartTick, int64_t loopEndTick) {
+    std::vector<std::string> ids;
+    for (auto& take : takes) {
+        const int64_t len = tickToFrame(p, loopEndTick, take.sampleRate) - tickToFrame(p, loopStartTick, take.sampleRate);
+        const int64_t usable = take.frames - latencyFrames;
+        Track* track = p.findTrack(take.trackId);
+        if (len <= 0 || usable < len) {  // no complete pass: an ordinary take
+            auto one = commitTakes(p, packageDir, {take}, latencyFrames);
+            ids.insert(ids.end(), one.begin(), one.end());
+            continue;
+        }
+        if (!track || track->kind != TrackKind::Audio) {
+            std::error_code ec;
+            fs::remove(take.tempPath, ec);
+            continue;
+        }
+        const std::string mediaId =
+            addMediaFile(p, packageDir, take.tempPath, take.sampleRate, take.channels, take.frames, "recording").id;
+        track = p.findTrack(take.trackId);
+        AudioClip clip;
+        clip.id = newId();
+        clip.mediaId = mediaId;
+        clip.startTick = loopStartTick;
+        clip.lengthTick = loopEndTick - loopStartTick;
+        int lastComplete = 0;
+        for (int64_t k = 0; k * len < usable; ++k) {
+            const int64_t passFrames = std::min(len, usable - k * len);
+            if (passFrames < len / 4) break;  // a short stub at the end isn't a take
+            clip.takeOffsets.push_back(latencyFrames + k * len);
+            if (passFrames == len) lastComplete = static_cast<int>(k);
+        }
+        clip.activeTake = lastComplete;
+        clip.sourceOffsetFrames = clip.takeOffsets[static_cast<size_t>(lastComplete)];
+        if (clip.takeOffsets.size() == 1) clip.takeOffsets.clear();  // a single pass is just a recording
+        ids.push_back(clip.id);
+        placeClipReplacing(p, *track, std::move(clip));
+    }
+    std::error_code ec;
+    fs::remove(fs::path(packageDir) / ".recording", ec);
+    return ids;
+}
+
 std::vector<std::string> commitTakes(Project& p, const std::string& packageDir,
                                      const std::vector<RecordedTake>& takes, int latencyFrames) {
     std::vector<std::string> ids;

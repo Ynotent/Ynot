@@ -201,6 +201,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
     clickRemaining_ = 0;
     scratchL_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
     scratchR_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
+    liveScratch_.assign(static_cast<size_t>(kMaxLiveMidiPerBlock), MidiEvent{});
     const double sr = opts.sampleRate;
     auto tickToFrame = [&](int64_t tick) { return tempo_.tickToFrame(tick, sr); };
 
@@ -332,9 +333,59 @@ void Engine::seek(int64_t frame) {
     }
 }
 
+void Engine::setLoop(int64_t startTick, int64_t endTick, bool enabled) {
+    const double sr = opts_.sampleRate;
+    const int64_t s = tempo_.tickToFrame(std::max<int64_t>(0, startTick), sr);
+    const int64_t e = tempo_.tickToFrame(endTick, sr);
+    loopStart_.store(s);
+    loopEnd_.store(e);
+    loopOn_.store(enabled && e > s);
+}
+
+void Engine::jumpTo(int64_t frame) {
+    pos_ = frame;
+    for (auto& ts : tracks_) {
+        auto it = std::lower_bound(ts->events.begin(), ts->events.end(), frame,
+                                   [](const TrackState::TimedEvent& e, int64_t f) { return e.frame < f; });
+        ts->eventCursor = static_cast<size_t>(it - ts->events.begin());
+        if (ts->instrument) ts->instrument->reset();  // release notes still sounding at the loop end
+    }
+}
+
 void Engine::process(float* left, float* right, int frames, const float* const* inputs, int numInputs,
                      bool transportRunning, const MidiEvent* liveMidi, int numLiveMidi) {
     frames = std::min(frames, opts_.maxBlock);
+    const bool loop = transportRunning && loopOn_.load(std::memory_order_relaxed);
+    const int64_t ls = loopStart_.load(std::memory_order_relaxed), le = loopEnd_.load(std::memory_order_relaxed);
+    if (!loop || le <= ls || pos_ >= le || pos_ + frames < le) {
+        processSegment(left, right, frames, inputs, numInputs, transportRunning, liveMidi, numLiveMidi);
+        return;
+    }
+    // The block reaches the loop end: render up to it, jump back, render the rest (repeating
+    // for loops shorter than a block).
+    constexpr int kMaxInputs = 64;
+    const float* ins[kMaxInputs];
+    const int numIns = std::min(numInputs, kMaxInputs);
+    for (int done = 0; done < frames;) {
+        int n = frames - done;
+        const bool wrap = pos_ < le && pos_ + n >= le;
+        if (wrap) n = static_cast<int>(le - pos_);
+        for (int c = 0; c < numIns; ++c) ins[c] = inputs && inputs[c] ? inputs[c] + done : nullptr;
+        int numLive = 0;
+        for (int k = 0; k < numLiveMidi && numLive < static_cast<int>(liveScratch_.size()); ++k)
+            if (liveMidi[k].frameOffset >= done && liveMidi[k].frameOffset < done + n) {
+                liveScratch_[static_cast<size_t>(numLive)] = liveMidi[k];
+                liveScratch_[static_cast<size_t>(numLive++)].frameOffset -= done;
+            }
+        processSegment(left + done, right + done, n, inputs ? ins : nullptr, numIns, transportRunning,
+                       liveScratch_.data(), numLive);
+        done += n;
+        if (wrap) jumpTo(ls);
+    }
+}
+
+void Engine::processSegment(float* left, float* right, int frames, const float* const* inputs, int numInputs,
+                            bool transportRunning, const MidiEvent* liveMidi, int numLiveMidi) {
     std::fill(left, left + frames, 0.f);
     std::fill(right, right + frames, 0.f);
     const int64_t blockStart = pos_, blockEnd = pos_ + frames;

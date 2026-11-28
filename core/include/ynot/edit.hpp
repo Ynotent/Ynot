@@ -64,6 +64,9 @@ bool moveInsert(Project& p, const std::string& trackId, const std::string& plugi
 std::string importAudioClip(Project& p, const std::string& packageDir, const std::string& trackId,
                             const AudioBuffer& audio, int64_t startTick);
 
+// Cycle-recording takes: make take `index` the one that plays (keeps the clip's trims).
+bool selectTake(Project& p, const std::string& trackId, const std::string& clipId, int index);
+
 // Tempo. Clips stay on their bars and beats. Audio clips keep their real duration (a tempo
 // change doesn't speed audio up; time stretch does), so their length in beats adjusts.
 void setTempo(Project& p, double bpm);                         // tempo at the start of the song

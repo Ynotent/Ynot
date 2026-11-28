@@ -116,6 +116,12 @@ public:
                  int numLiveMidi = 0);
     void seek(int64_t frame);
     int64_t position() const { return pos_; }
+    // Cycle: while enabled and the transport runs, reaching endTick jumps back to startTick,
+    // sample-accurately. Held notes are released at the jump; effect tails carry on. Safe to
+    // call from another thread while audio runs. Offline renders don't loop.
+    void setLoop(int64_t startTick, int64_t endTick, bool enabled);
+    int64_t loopStartFrame() const { return loopStart_.load(); }
+    int64_t loopEndFrame() const { return loopEnd_.load(); }
     int maxBlock() const { return opts_.maxBlock; }
     // Live-only click (never part of bounces or freezes). Realtime-safe toggle.
     void setMetronome(bool on) { metronome_.store(on); }
@@ -139,6 +145,12 @@ private:
     int clickRemaining_ = 0;
     double clickPhase_ = 0, clickInc_ = 0;
     void renderClick(float* left, float* right, int frames, int64_t blockStart);
+    void processSegment(float* left, float* right, int frames, const float* const* inputs, int numInputs,
+                        bool transportRunning, const MidiEvent* liveMidi, int numLiveMidi);
+    void jumpTo(int64_t frame);  // loop wrap: like seek, but effects keep their tails
+    std::atomic<int64_t> loopStart_{0}, loopEnd_{0};
+    std::atomic<bool> loopOn_{false};
+    std::vector<MidiEvent> liveScratch_;
 };
 
 // Offline helpers built on Engine.

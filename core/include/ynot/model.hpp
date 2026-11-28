@@ -45,6 +45,10 @@ struct AudioClip {
     int64_t stretchSourceOffsetFrames = 0;  // original frame at the render's frame 0
     double stretchRatio = 1.0;              // length / original length
     std::string stretchMode;                // "mono", "poly", "varispeed"
+    // Cycle-recording takes: where each pass starts in the media. sourceOffsetFrames is
+    // takeOffsets[activeTake] plus any trim, so switching takes keeps trims and splits.
+    std::vector<int64_t> takeOffsets;
+    int activeTake = 0;
 };
 
 struct MidiNote {
@@ -133,6 +137,11 @@ struct Project {
     std::string name;
     double tempoBpm = 120.0;              // tempo at the start of the song
     std::vector<TempoChange> tempoChanges;  // later changes, sorted by tick (all > 0)
+    struct Loop {
+        int64_t startTick = 0, endTick = 0;
+        bool enabled = false;
+        bool valid() const { return endTick > startTick; }
+    } loop;  // cycle region: playback repeats it; recording records a take per pass
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
     double sampleRateHint = 48000;  // last-used device rate; informative only

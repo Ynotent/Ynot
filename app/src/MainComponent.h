@@ -67,6 +67,7 @@ private:
     void addTimeSignatureItems(juce::PopupMenu& m);
     void addSampleRateItems(juce::PopupMenu& m);
     void addTempoItems(juce::PopupMenu& m);
+    void addLoopItems(juce::PopupMenu& m);
     // Small dialog asking for a number; `onOk` gets the value if it's within [lo, hi].
     void askNumber(const juce::String& title, const juce::String& message, double initial, double lo, double hi,
                    std::function<void(double)> onOk);
@@ -82,7 +83,7 @@ private:
     // Transport and editing (always visible).
     juce::TextButton playButton_{"Play"}, recordButton_{"Record"}, clickButton_{"Click"};
     juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
-    juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"}, rateButton_{"48 kHz"}, tempoButton_{"120 BPM"};
+    juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"}, rateButton_{"48 kHz"}, tempoButton_{"120 BPM"}, loopButton_{"Loop"};
     juce::TextButton addTrackButton_{"+ Track"};
     juce::TextButton undoButton_{"Undo"}, redoButton_{"Redo"}, keysButton_{"Keys"};
     // File/device actions: toolbar on larger screens, "More" menu on phones.

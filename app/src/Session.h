@@ -111,6 +111,15 @@ public:
     // Time signature (stored in the project; undoable).
     void setTimeSignature(int numerator, int denominator);
 
+    // Loop (cycle): playback repeats the loop; recording records a take per pass (audio) or
+    // merges every pass (MIDI). Stored in the project. Takes effect immediately, no rebuild.
+    void setLoopRange(int64_t startTick, int64_t endTick);
+    void setLoopEnabled(bool on);
+    bool loopEnabled() const { return project_.loop.enabled && project_.loop.valid(); }
+    int64_t loopStart() const { return project_.loop.startTick; }
+    int64_t loopEnd() const { return project_.loop.endTick; }
+    bool selectTake(const std::string& trackId, const std::string& clipId, int index);
+
     // Punch recording: with punch on, Record pre-rolls a bar and records only between in and out.
     void setPunchEnabled(bool on) { punchEnabled_ = on; if (onChange) onChange(); }
     bool punchEnabled() const { return punchEnabled_; }
@@ -196,6 +205,11 @@ private:
     ynot::MidiTakeRecorder midiRecorder_;
     std::atomic<bool> recordingAudio_{false}, recordingMidi_{false};
     int64_t recordStart_ = 0;
+    // Continuous clock for recording: like the playhead, but it keeps running across loop
+    // jumps, so pass k of a cycle recording is at loop start + k * loop length.
+    std::atomic<int64_t> recordClock_{0};
+    bool cycleActive_ = false;  // this recording is a cycle recording
+    void applyLoopToEngine(ynot::Engine& e) const;
     int64_t recordEnd_ = std::numeric_limits<int64_t>::max();
     const ynot::QuantizeSettings* recordQuantize();
     std::string recordQuantizeId_;

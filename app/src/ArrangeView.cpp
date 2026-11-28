@@ -183,6 +183,15 @@ public:
                 g.fillRect(juce::Rectangle<float>(l, static_cast<float>(getHeight() - 7), x1 - l, 7.f));
             }
         }
+        // Loop: a band along the top of the ruler (dim when the loop is off).
+        if (p.loop.valid()) {
+            const float x0 = std::max(static_cast<float>(owner_.tickToX(p.loop.startTick)), static_cast<float>(owner_.laneX0()));
+            const float x1 = static_cast<float>(owner_.tickToX(p.loop.endTick));
+            if (x1 > x0) {
+                g.setColour(th.secondary.withAlpha(session.loopEnabled() ? 0.9f : 0.25f));
+                g.fillRoundedRectangle(juce::Rectangle<float>(x0, 0.f, x1 - x0, 5.f), 2.f);
+            }
+        }
         const int beatsPerBar = std::max(1, p.timeSigNumerator);
         const int64_t beatTicks = p.beatTicks();
         const double beatPx = owner_.pixelsPerBeat_ * static_cast<double>(beatTicks) / ynot::kTicksPerQuarter;
@@ -226,12 +235,23 @@ public:
     }
 
     // Click/drag: move the playhead. Shift+drag: set the punch range (and turn punch on).
+    // Option/Alt+drag: draw the loop (and turn it on).
     void mouseDown(const juce::MouseEvent& e) override {
-        punchDrag_ = e.mods.isShiftDown();
-        if (punchDrag_) punchAnchor_ = snapped(e.x);
+        loopDrag_ = e.mods.isAltDown();
+        punchDrag_ = !loopDrag_ && e.mods.isShiftDown();
+        if (punchDrag_ || loopDrag_) punchAnchor_ = snapped(e.x);
         else seek(e);
     }
     void mouseDrag(const juce::MouseEvent& e) override {
+        if (loopDrag_) {
+            const int64_t a = punchAnchor_, b = snapped(e.x);
+            if (b != a) {
+                owner_.session_.setLoopRange(std::min(a, b), std::max(a, b));
+                owner_.session_.setLoopEnabled(true);
+            }
+            owner_.repaint();
+            return;
+        }
         if (!punchDrag_) { seek(e); return; }
         owner_.session_.setPunchRange(punchAnchor_, snapped(e.x));
         owner_.session_.setPunchEnabled(true);
@@ -246,7 +266,7 @@ private:
         owner_.repaint();
     }
     ArrangeView& owner_;
-    bool punchDrag_ = false;
+    bool punchDrag_ = false, loopDrag_ = false;
     int64_t punchAnchor_ = 0;
 };
 
@@ -702,8 +722,23 @@ private:
             m.addSubMenu("Quantize", quantizePresetMenu({}, [this, c](const std::string& id) {
                 owner_.session_.quantizeClip(c.trackId, c.clipId, id);
             }, false));
-        if (const auto* a = c.audio ? audioClip(c.trackId, c.clipId) : nullptr)
+        if (const auto* a = c.audio ? audioClip(c.trackId, c.clipId) : nullptr) {
+            if (a->takeOffsets.size() > 1) {
+                juce::PopupMenu takes;
+                for (int i = 0; i < static_cast<int>(a->takeOffsets.size()); ++i)
+                    takes.addItem("Take " + juce::String(i + 1), true, i == a->activeTake,
+                                  [this, c, i] { owner_.session_.selectTake(c.trackId, c.clipId, i); });
+                m.addSubMenu("Takes (" + juce::String(a->activeTake + 1) + " of " +
+                                 juce::String(static_cast<int>(a->takeOffsets.size())) + ")",
+                             takes);
+            }
             m.addSubMenu("Time stretch", stretchMenu(c, *a));
+        }
+        m.addItem("Loop this clip", [this, c] {
+            owner_.session_.setLoopRange(c.startTick, c.startTick + c.lengthTick);
+            owner_.session_.setLoopEnabled(true);
+            owner_.repaint();
+        });
         m.addItem("Set punch range to this clip", [this, c] {
             owner_.session_.setPunchRange(c.startTick, c.startTick + c.lengthTick);
             owner_.session_.setPunchEnabled(true);

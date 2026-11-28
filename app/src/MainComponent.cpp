@@ -43,7 +43,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
 
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
-                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_})
+                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_})
         addAndMakeVisible(*b);
     addTrackButton_.onClick = [this] {
         juce::PopupMenu m;
@@ -66,6 +66,14 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
         addTimeSignatureItems(m);
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(timeSigButton_));
     };
+    loopButton_.setTooltip("Loop a section (L). Option/Alt-drag in the ruler to set it. Recording with the loop on "
+                           "records a take on every pass.");
+    loopButton_.setColour(juce::TextButton::buttonOnColourId, theme_.secondary);
+    loopButton_.onClick = [this] {
+        juce::PopupMenu m;
+        addLoopItems(m);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(loopButton_));
+    };
     tempoButton_.setTooltip("Tempo at the playhead. Click to change it or add tempo changes.");
     tempoButton_.onClick = [this] {
         juce::PopupMenu m;
@@ -83,7 +91,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_,
-                    &tempoButton_, &rateButton_, &addTrackButton_})
+                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_})
         b->setMouseClickGrabsKeyboardFocus(false);
     // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
     // (play/stop) and Return (to start) still work while the keyboard has focus.
@@ -163,6 +171,7 @@ void MainComponent::resized() {
     monitorButton_.setVisible(!compact());
     for (auto* b : {&quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_})
         b->setVisible(!compact());
+    toolbar.push_back(&loopButton_);  // phones too: looping is part of playing
     if (!compact()) {
         for (auto* b : {&countInButton_, &monitorButton_, &punchButton_, &quantizeButton_, &timeSigButton_,
                         &tempoButton_, &rateButton_, &addTrackButton_})
@@ -248,6 +257,11 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
         key == juce::KeyPress('y', cmd, 0))
         return session_.redo(), true;
     if (key == juce::KeyPress('s', cmd, 0)) return session_.save(), true;
+    if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'l' || key.getTextCharacter() == 'L')) {
+        session_.setLoopEnabled(!session_.loopEnabled());
+        refresh();
+        return true;
+    }
     if (key == juce::KeyPress::spaceKey) return togglePlay(), true;
     // Return/Enter or Home: back to the start (keeps playing if the transport is running).
     if (key == juce::KeyPress::returnKey || key == juce::KeyPress::homeKey) {
@@ -301,6 +315,7 @@ void MainComponent::refresh() {
     recordButton_.setButtonText(session_.isRecording() ? "Stop Rec" : "Record");
     undoButton_.setEnabled(session_.canUndo() && !session_.isRecording());
     punchButton_.setToggleState(session_.punchEnabled(), juce::dontSendNotification);
+    loopButton_.setToggleState(session_.loopEnabled(), juce::dontSendNotification);
     if (session_.hasProject())
         timeSigButton_.setButtonText(juce::String(session_.project().timeSigNumerator) + "/" +
                                      juce::String(session_.project().timeSigDenominator));
@@ -525,6 +540,40 @@ void MainComponent::addTimeSignatureItems(juce::PopupMenu& m) {
                               session_.setTimeSignature(n, d);
                               refresh();
                           });
+}
+
+void MainComponent::addLoopItems(juce::PopupMenu& m) {
+    if (!session_.hasProject()) return;
+    const bool rec = session_.isRecording();
+    m.addItem("Loop  (L)", !rec, session_.loopEnabled(), [this] {
+        session_.setLoopEnabled(!session_.loopEnabled());
+        refresh();
+    });
+    m.addSeparator();
+    const auto& p = session_.project();
+    const int64_t bar = session_.positionTick() / p.barTicks() * p.barTicks();
+    for (int bars : {1, 2, 4, 8})
+        m.addItem("Loop " + juce::String(bars) + (bars == 1 ? " bar" : " bars") + " from the playhead's bar", !rec, false,
+                  [this, bar, bars] {
+                      session_.setLoopRange(bar, bar + bars * session_.project().barTicks());
+                      session_.setLoopEnabled(true);
+                      refresh();
+                  });
+    m.addItem("Loop the selected clip", !rec && arrange_.hasSelection(), false, [this] {
+        if (auto span = ynot::findClip(session_.project(), arrange_.selectedTrackId(), arrange_.selectedClipId())) {
+            session_.setLoopRange(span->startTick, span->startTick + span->lengthTick);
+            session_.setLoopEnabled(true);
+            refresh();
+        }
+    });
+    m.addItem("Loop the punch range", !rec, false, [this] {
+        session_.setLoopRange(session_.punchIn(), session_.punchOut());
+        session_.setLoopEnabled(true);
+        refresh();
+    });
+    m.addSeparator();
+    m.addItem("Tip: Option/Alt-drag in the ruler to draw the loop", false, false, [] {});
+    m.addItem("Recording with the loop on records a take on every pass", false, false, [] {});
 }
 
 void MainComponent::askNumber(const juce::String& title, const juce::String& message, double initial, double lo,

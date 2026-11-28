@@ -80,6 +80,39 @@ bool Session::redo() {
     return true;
 }
 
+void Session::applyLoopToEngine(ynot::Engine& e) const {
+    // Punch recording records a fixed range, so the loop pauses while it runs.
+    const bool on = loopEnabled() && !(recording_ && punchActive_);
+    e.setLoop(project_.loop.startTick, project_.loop.endTick, on);
+}
+
+void Session::setLoopRange(int64_t startTick, int64_t endTick) {
+    if (recording_) return;
+    if (endTick < startTick) std::swap(startTick, endTick);
+    project_.loop.startTick = std::max<int64_t>(0, startTick);
+    project_.loop.endTick = std::max(project_.loop.startTick + ynot::kTicksPerQuarter, endTick);  // at least a beat
+    if (auto* e = active_.load()) applyLoopToEngine(*e);
+    if (onChange) onChange();
+}
+
+void Session::setLoopEnabled(bool on) {
+    if (recording_) return;
+    if (on && !project_.loop.valid()) {  // first use: the 4 bars from the playhead's bar
+        const int64_t bar = positionTick() / project_.barTicks() * project_.barTicks();
+        project_.loop.startTick = bar;
+        project_.loop.endTick = bar + 4 * project_.barTicks();
+    }
+    project_.loop.enabled = on;
+    if (auto* e = active_.load()) applyLoopToEngine(*e);
+    if (onChange) onChange();
+}
+
+bool Session::selectTake(const std::string& trackId, const std::string& clipId, int index) {
+    bool ok = false;
+    edit([&](ynot::Project& p) { ok = ynot::selectTake(p, trackId, clipId, index); });
+    return ok;
+}
+
 void Session::seekToTick(int64_t tick) {
     const int64_t frame = ynot::tickToFrame(project_, std::max<int64_t>(0, tick), sampleRate_);
     position_ = frame;
@@ -131,6 +164,7 @@ void Session::rebuild() {
     fresh->seek(position_.load());
     fresh->setMetronome(metronomeOn_.load());
     fresh->setForcedClickUntil(forcedClickUntil_);
+    applyLoopToEngine(*fresh);
     issues_ = fresh->issues();
 
     ynot::Engine* old = active_.exchange(fresh);
@@ -303,8 +337,11 @@ bool Session::startRecording(std::string& error) {
     // Count-in / punch pre-roll: start the transport early so the performer hears the lead-up,
     // but only record from the record point (the playhead, or punch-in).
     const bool punch = punchEnabled_ && punchOut_ > punchIn_;
-    const int64_t recordStart = punch ? ynot::tickToFrame(project_, punchIn_, sampleRate_)
-                                      : std::max<int64_t>(0, position_.load());
+    // Cycle recording: with the loop on (and punch off), record from the loop start, pass after pass.
+    const bool cycle = !punch && loopEnabled();
+    const int64_t recordStart = punch   ? ynot::tickToFrame(project_, punchIn_, sampleRate_)
+                                : cycle ? ynot::tickToFrame(project_, project_.loop.startTick, sampleRate_)
+                                        : std::max<int64_t>(0, position_.load());
     const int64_t recordEnd = punch ? ynot::tickToFrame(project_, punchOut_, sampleRate_)
                                     : std::numeric_limits<int64_t>::max();
     const int64_t countIn = ynot::tickToFrame(project_, int64_t(countInBars_) * project_.barTicks(), sampleRate_);
@@ -325,6 +362,8 @@ bool Session::startRecording(std::string& error) {
     recordStart_ = recordStart;
     recordEnd_ = recordEnd;
     punchActive_ = punch;
+    cycleActive_ = cycle;
+    recordClock_ = recordStart - preRoll;
     forcedClickUntil_ = countIn > 0 ? recordStart : std::numeric_limits<int64_t>::min();
     position_ = recordStart - preRoll;
     rebuild();  // engine starts at the pre-roll position with the count-in click
@@ -350,7 +389,7 @@ Session::RecordResult Session::stopRecording() {
     while (inCallback_.load()) std::this_thread::yield();
     draining_ = false;
     if (drainThread_.joinable()) drainThread_.join();
-    const int64_t stopFrame = std::min(position_.load(), recordEnd_);  // punch-out ends the take
+    const int64_t stopFrame = std::min(recordClock_.load(), recordEnd_);  // punch-out ends the take
     auto takes = recordingAudio_ ? recorder_.finish() : std::vector<ynot::RecordedTake>{};
     auto midiEvents = recordingMidi_ ? midiRecorder_.finish() : std::vector<ynot::TimedMidiEvent>{};
     forcedClickUntil_ = std::numeric_limits<int64_t>::min();
@@ -359,7 +398,9 @@ Session::RecordResult Session::stopRecording() {
     result.error = recorder_.error();
     const int latency = device_.manager().getCurrentAudioDevice() ? ynot::recordingOffsetFrames(device_) : 0;
     history_.record(project_);
-    result.newClips = ynot::commitTakes(project_, dir_.getFullPathName().toStdString(), takes, latency);
+    result.newClips = cycleActive_ ? ynot::commitCycleTakes(project_, dir_.getFullPathName().toStdString(), takes,
+                                                            latency, project_.loop.startTick, project_.loop.endTick)
+                                   : ynot::commitTakes(project_, dir_.getFullPathName().toStdString(), takes, latency);
     if (recordingMidi_) {
         if (punchActive_ && stopFrame > recordStart_) {
             // Punch replaces the old notes inside the range (outside is untouched).
@@ -370,7 +411,11 @@ Session::RecordResult Session::stopRecording() {
         }
         // MIDI is timestamped at the engine frame it was played, so no latency offset applies.
         const ynot::QuantizeSettings* q = recordQuantize();
-        if (auto clip = ynot::buildMidiClip(project_, midiEvents, recordStart_, stopFrame, sampleRate_, q)) {
+        const int64_t loopEndFrame = ynot::tickToFrame(project_, project_.loop.endTick, sampleRate_);
+        auto built = cycleActive_ ? ynot::buildCycleMidiClip(project_, midiEvents, recordStart_, loopEndFrame,
+                                                             stopFrame, sampleRate_, q)
+                                  : ynot::buildMidiClip(project_, midiEvents, recordStart_, stopFrame, sampleRate_, q);
+        if (auto clip = built) {
             for (auto& t : project_.tracks)
                 if (t.armed && t.kind == ynot::TrackKind::Instrument) {
                     auto c = *clip;
@@ -383,6 +428,7 @@ Session::RecordResult Session::stopRecording() {
     }
     recordingAudio_ = recordingMidi_ = false;
     punchActive_ = false;
+    cycleActive_ = false;
     recordEnd_ = std::numeric_limits<int64_t>::max();
     save();
     rebuild();
@@ -586,8 +632,13 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
         else if (m.isNoteOff()) liveMidi_[static_cast<size_t>(numLive++)] = {meta.samplePosition, false, m.getNoteNumber(), 0};
     }
     // Capture before rendering: some drivers share input and output buffers.
-    if (engine && recordingAudio_.load()) recorder_.capture(ins, numIns, frames, engine->position());
-    if (engine && recordingMidi_.load()) midiRecorder_.capture(liveMidi_.data(), numLive, engine->position());
+    // Recording uses its own continuous clock: the playhead jumps back at the loop end, the
+    // recording doesn't (cycle passes follow each other in the take).
+    const bool capturing = engine && (recordingAudio_.load() || recordingMidi_.load());
+    const int64_t clock = recordClock_.load();
+    if (engine && recordingAudio_.load()) recorder_.capture(ins, numIns, frames, clock);
+    if (engine && recordingMidi_.load()) midiRecorder_.capture(liveMidi_.data(), numLive, clock);
+    if (capturing) recordClock_ = clock + frames;
     if (numOuts < 2) frames = std::min(frames, kScratchFrames);
     float* l = numOuts > 0 ? outs[0] : scratchL_.data();
     float* r = numOuts > 1 ? outs[1] : scratchR_.data();

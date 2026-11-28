@@ -392,6 +392,43 @@ static int runSmokeTest(const juce::File& dir) {
                "reset returns the clip to its original audio and length");
     }
 
+    {   // Loop + cycle recording: 2.5 passes over bar 2 -> one clip with 3 takes, last full pass active.
+        const int64_t bar = session.project().barTicks();
+        session.edit([&](ynot::Project& p) {
+            for (auto& t : p.tracks) t.armed = t.id == vocalsId;
+        });
+        session.setPunchEnabled(false);
+        session.setCountInBars(0);
+        session.setLoopRange(bar, 2 * bar);
+        session.setLoopEnabled(true);
+        std::string err;
+        const bool started = session.startRecording(err);
+        const int block = 500;  // not a divisor of the loop length: wraps land mid-block
+        std::vector<float> in(block, 0.25f), silence(block), outL(block), outR(block);
+        const float* ins[2] = {in.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        bool stayedInLoop = true;
+        for (int b = 0; b < 5 * 48000 / block; ++b) {  // 5 s = 2.5 passes of a 2 s bar
+            session.processForTesting(ins, 2, outs, 2, block);
+            const int64_t t = session.positionTick();
+            stayedInLoop &= t >= bar && t <= 2 * bar;
+        }
+        auto res = session.stopRecording();
+        const ynot::AudioClip* take = nullptr;
+        for (auto& c : session.project().findTrack(vocalsId)->audioClips)
+            if (!res.newClips.empty() && c.id == res.newClips[0]) take = &c;
+        expect(started && stayedInLoop, "with the loop on, recording plays the loop over and over");
+        expect(take && take->startTick == bar && take->lengthTick == bar && take->takeOffsets.size() == 3 &&
+                   take->activeTake == 1,
+               "cycle recording keeps each pass as a take; the last complete pass plays");
+        if (take) {
+            const auto id = take->id;
+            expect(session.selectTake(vocalsId, id, 0), "an earlier take can be chosen");
+        }
+        session.setLoopEnabled(false);
+        session.seekToTick(0);
+    }
+
     {   // Tempo: a change at bar 3 moves the playhead's time but not its bar; undo restores it.
         const int64_t bar3 = 2 * session.project().barTicks();
         session.seekToTick(bar3 + ynot::kTicksPerQuarter);
