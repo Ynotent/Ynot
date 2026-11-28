@@ -68,8 +68,8 @@ bool commitStretch(Project& p, const std::string& packageDir, const StretchJob& 
 bool stretchClip(Project& p, const std::string& packageDir, MediaProvider& media, const std::string& trackId,
                  const std::string& clipId, double ratio, StretchMode mode, std::string* error = nullptr);
 
-// Ratio that makes a loop recorded at `sourceBpm` play in time at the project tempo.
-double ratioForTempo(const Project& p, double sourceBpm);
+// Ratio that makes a loop recorded at `sourceBpm` play in time at the song's tempo at `atTick`.
+double ratioForTempo(const Project& p, double sourceBpm, int64_t atTick = 0);
 // Ratio that makes the clip's original length a whole number of bars (nearest, at least 1).
 double ratioToFitBars(const Project& p, const AudioClip& c);
 

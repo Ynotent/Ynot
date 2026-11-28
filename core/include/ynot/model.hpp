@@ -89,11 +89,20 @@ struct PluginInstance {
 struct FreezeInfo {
     std::string mediaId;          // rendered audio of the track (post-inserts, pre-fader)
     std::string sourceFingerprint;// fingerprint of the track when it was frozen
+    std::string tempoSignature;   // the song's tempo map when frozen (empty: older projects)
     Platform renderedOn = Platform::Linux;
     std::string renderedAt;       // ISO-8601
 };
 
 enum class TrackKind { Audio, Instrument };
+
+// A tempo change: from `tick` on, the song runs at `bpm` (quarter notes per minute) until the
+// next change. Changes are instant steps.
+struct TempoChange {
+    int64_t tick = 0;
+    double bpm = 120.0;
+};
+constexpr double kMinBpm = 20.0, kMaxBpm = 400.0;
 
 struct Track {
     std::string id;
@@ -122,7 +131,8 @@ struct Project {
     int formatVersion = 1;
     std::string id;
     std::string name;
-    double tempoBpm = 120.0;
+    double tempoBpm = 120.0;              // tempo at the start of the song
+    std::vector<TempoChange> tempoChanges;  // later changes, sorted by tick (all > 0)
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
     double sampleRateHint = 48000;  // last-used device rate; informative only
@@ -135,7 +145,11 @@ struct Project {
     const MediaRef* findMedia(const std::string& id) const;
     std::vector<const Track*> orderedTracks() const;
 
-    double secondsPerTick() const { return 60.0 / tempoBpm / static_cast<double>(kTicksPerQuarter); }
+    // Musical time <-> seconds, following the tempo map. Use these rather than assuming one tempo.
+    double tempoAt(int64_t tick) const;
+    double tickToSeconds(double tick) const;
+    double secondsToTick(double seconds) const;
+    std::string tempoSignature() const;  // changes whenever the tempo map does
     // Time signature in ticks. The beat is the denominator's note value (an eighth in 6/8);
     // tempo stays in quarter notes per minute on every platform.
     int64_t beatTicks() const {
@@ -145,6 +159,26 @@ struct Project {
     }
     int64_t barTicks() const { return beatTicks() * std::max(1, timeSigNumerator); }
     int64_t endTick() const;
+};
+
+// Precomputed tempo map for fast, allocation-free lookups (the audio thread uses one).
+class TempoMap {
+public:
+    TempoMap() = default;
+    explicit TempoMap(const Project& p);
+    double tickToSeconds(double tick) const;
+    double secondsToTick(double seconds) const;
+    double bpmAt(double tick) const;
+    int64_t tickToFrame(int64_t tick, double sampleRate) const;
+    int64_t frameToTick(int64_t frame, double sampleRate) const;
+
+private:
+    struct Segment {
+        double tick, seconds, secondsPerTick;
+    };
+    std::vector<Segment> segs_{{0.0, 0.0, 60.0 / 120.0 / kTicksPerQuarter}};
+    const Segment& segForTick(double tick) const;
+    const Segment& segForSeconds(double seconds) const;
 };
 
 }  // namespace ynot

@@ -129,7 +129,7 @@ private:
     std::vector<std::unique_ptr<TrackState>> tracks_;
     std::vector<EngineIssue> issues_;
     EngineOptions opts_;
-    double secondsPerTick_ = 0;
+    TempoMap tempo_;
     int64_t pos_ = 0;
     std::vector<float> scratchL_, scratchR_;
     std::atomic<bool> metronome_{false};

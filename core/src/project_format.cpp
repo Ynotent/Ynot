@@ -12,7 +12,7 @@ namespace {
 // Keys this version understands, per object kind. Anything else is preserved
 // verbatim in `extras` and written back on save.
 const std::vector<std::string> kProjectKeys = {
-    "format", "formatVersion", "id", "name", "tempoBpm", "timeSignature",
+    "format", "formatVersion", "id", "name", "tempoBpm", "tempoChanges", "timeSignature",
     "sampleRateHint", "tracks", "media"};
 const std::vector<std::string> kTrackKeys = {
     "id", "name", "kind", "order", "gainDb", "pan", "mute", "solo", "armed", "color",
@@ -181,6 +181,7 @@ Json trackToJson(const Track& t) {
         Json f = Json::object();
         f["mediaId"] = t.freeze->mediaId;
         f["sourceFingerprint"] = t.freeze->sourceFingerprint;
+        if (!t.freeze->tempoSignature.empty()) f["tempoSignature"] = t.freeze->tempoSignature;
         f["renderedOn"] = toString(t.freeze->renderedOn);
         f["renderedAt"] = t.freeze->renderedAt;
         j["freeze"] = f;
@@ -254,6 +255,7 @@ Track trackFromJson(const Json& j) {
         FreezeInfo fi;
         fi.mediaId = f->getString("mediaId", "");
         fi.sourceFingerprint = f->getString("sourceFingerprint", "");
+        fi.tempoSignature = f->getString("tempoSignature", "");
         fi.renderedOn = platformFromString(f->getString("renderedOn", "")).value_or(Platform::Linux);
         fi.renderedAt = f->getString("renderedAt", "");
         t.freeze = fi;
@@ -270,6 +272,16 @@ Json projectToJson(const Project& p) {
     j["id"] = p.id;
     j["name"] = p.name;
     j["tempoBpm"] = p.tempoBpm;
+    if (!p.tempoChanges.empty()) {
+        Json tm = Json::array();
+        for (const auto& c : p.tempoChanges) {
+            Json cj = Json::object();
+            cj["tick"] = c.tick;
+            cj["bpm"] = c.bpm;
+            tm.push(cj);
+        }
+        j["tempoChanges"] = tm;
+    }
     j["timeSignature"] = JsonArray{Json(p.timeSigNumerator), Json(p.timeSigDenominator)};
     j["sampleRateHint"] = p.sampleRateHint;
     Json tracks = Json::array();
@@ -294,6 +306,16 @@ Project projectFromJson(const Json& input) {
     p.name = j.getString("name", "Untitled");
     p.tempoBpm = j.getNumber("tempoBpm", 120);
     if (p.tempoBpm < 10 || p.tempoBpm > 999) p.tempoBpm = 120;
+    if (auto* tm = j.find("tempoChanges"); tm && tm->isArray()) {
+        for (auto& cj : tm->asArray()) {
+            TempoChange c;
+            c.tick = cj.getInt("tick", 0);
+            c.bpm = std::clamp(cj.getNumber("bpm", p.tempoBpm), kMinBpm, kMaxBpm);
+            if (c.tick > 0) p.tempoChanges.push_back(c);
+        }
+        std::stable_sort(p.tempoChanges.begin(), p.tempoChanges.end(),
+                         [](const TempoChange& a, const TempoChange& b) { return a.tick < b.tick; });
+    }
     if (auto* ts = j.find("timeSignature"); ts && ts->isArray() && ts->size() == 2) {
         p.timeSigNumerator = static_cast<int>(ts->asArray()[0].asInt());
         p.timeSigDenominator = static_cast<int>(ts->asArray()[1].asInt());

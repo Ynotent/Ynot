@@ -112,5 +112,10 @@ const MediaRef& addMediaFile(Project& p, const std::string& packageDir, const st
 
 int64_t frameToTick(const Project& p, int64_t frame, double sampleRate);
 int64_t tickToFrame(const Project& p, int64_t tick, double sampleRate);
+// Durations measured from a song position (the tempo can change along the way).
+// Ticks covered by `frames` of audio that starts at `startTick`.
+int64_t ticksSpanning(const Project& p, int64_t startTick, int64_t frames, double sampleRate);
+// Frames of audio covering `ticks` from `startTick` (negative ticks: before it).
+int64_t framesSpanning(const Project& p, int64_t startTick, int64_t ticks, double sampleRate);
 
 }  // namespace ynot

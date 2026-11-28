@@ -292,11 +292,11 @@ static int runSmokeTest(const juce::File& dir) {
                 // 0.5 s of a 440 Hz tone at 44.1 kHz (lossy codecs may pad a little).
                 const bool good = d.ok && std::abs(d.audio.sampleRate - 44100.0) < 1.0 && d.audio.frames() >= 21000 &&
                                   d.audio.frames() <= 26000;
-                float peak = 0;
-                for (float v : d.audio.samples) peak = std::max(peak, std::abs(v));
+                float importPeak = 0;
+                for (float v : d.audio.samples) importPeak = std::max(importPeak, std::abs(v));
                 std::cout << "  info import ." << ext << ": " << (good ? "ok via " + d.formatName : "FAILED " + d.error)
                           << " (" << d.formatName << ", " << d.audio.sampleRate << " Hz, " << d.audio.channels
-                          << " ch, " << d.audio.frames() << " frames, peak " << peak << ")" << std::endl;
+                          << " ch, " << d.audio.frames() << " frames, peak " << importPeak << ")" << std::endl;
                 allOk &= good;
             }
             for (auto& ext : mustFail) {
@@ -349,7 +349,7 @@ static int runSmokeTest(const juce::File& dir) {
         }
         auto res = session.stopRecording();
         bool take96Ok = false;
-        const double oneSecondTicks = 1.0 / session.project().secondsPerTick();
+        const double oneSecondTicks = static_cast<double>(ynot::ticksSpanning(session.project(), bar2, rate, rate));
         for (auto& c : session.project().findTrack(vocalsId)->audioClips)
             if (started && !res.newClips.empty() && c.id == res.newClips[0])
                 if (auto* m = session.project().findMedia(c.mediaId))
@@ -390,6 +390,21 @@ static int runSmokeTest(const juce::File& dir) {
         c = find();
         expect(err.isEmpty() && c && std::abs(c->lengthTick - len) <= 1 && !ynot::clipStretchMode(*c),
                "reset returns the clip to its original audio and length");
+    }
+
+    {   // Tempo: a change at bar 3 moves the playhead's time but not its bar; undo restores it.
+        const int64_t bar3 = 2 * session.project().barTicks();
+        session.seekToTick(bar3 + ynot::kTicksPerQuarter);
+        const double before = session.positionSeconds();
+        session.edit([&](ynot::Project& p) { ynot::setTempoChange(p, bar3, 60); });
+        session.seekToTick(bar3 + ynot::kTicksPerQuarter);
+        const double after = session.positionSeconds();
+        expect(std::abs(after - before - 0.5) < 1e-3 && session.positionTick() == bar3 + ynot::kTicksPerQuarter &&
+                   std::abs(session.project().tempoAt(bar3) - 60) < 1e-9,
+               "a tempo change slows the song from its bar on; the playhead keeps its bar and beat");
+        session.undo();
+        expect(session.project().tempoChanges.empty(), "undo removes the tempo change");
+        session.seekToTick(0);
     }
 
     session.save();

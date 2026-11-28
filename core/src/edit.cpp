@@ -35,7 +35,7 @@ double mediaRate(const Project& p, const AudioClip& c) {
 int64_t maxAudioClipTicks(const Project& p, const AudioClip& c) {
     const MediaRef* m = p.findMedia(c.mediaId);
     if (!m || m->frames <= 0) return std::numeric_limits<int64_t>::max() / 4;  // unknown: don't constrain
-    return frameToTick(p, std::max<int64_t>(0, m->frames - c.sourceOffsetFrames), m->sampleRate);
+    return ticksSpanning(p, c.startTick, std::max<int64_t>(0, m->frames - c.sourceOffsetFrames), m->sampleRate);
 }
 
 std::optional<ClipSpan> findClip(const Project& p, const std::string& trackId, const std::string& clipId) {
@@ -84,11 +84,10 @@ bool trimClipStart(Project& p, const std::string& trackId, const std::string& cl
         const int64_t end = c->startTick + c->lengthTick;
         const double rate = mediaRate(p, *c);
         // Can't reveal audio before the start of the recording.
-        const int64_t earliest = c->startTick - frameToTick(p, c->sourceOffsetFrames, rate);
+        const int64_t earliest = c->startTick + ticksSpanning(p, c->startTick, -c->sourceOffsetFrames, rate);
         newStartTick = std::clamp<int64_t>(newStartTick, std::max<int64_t>(0, earliest), end - kMinClipTicks);
         const int64_t delta = newStartTick - c->startTick;
-        c->sourceOffsetFrames = std::max<int64_t>(0, c->sourceOffsetFrames + (delta >= 0 ? tickToFrame(p, delta, rate)
-                                                                                          : -tickToFrame(p, -delta, rate)));
+        c->sourceOffsetFrames = std::max<int64_t>(0, c->sourceOffsetFrames + framesSpanning(p, c->startTick, delta, rate));
         c->startTick = newStartTick;
         c->lengthTick = end - newStartTick;
         return true;
@@ -131,7 +130,7 @@ std::optional<std::string> splitClip(Project& p, const std::string& trackId, con
         right.id = newId();
         right.startTick = atTick;
         right.lengthTick = e - atTick;
-        right.sourceOffsetFrames = c->sourceOffsetFrames + tickToFrame(p, atTick - s, mediaRate(p, *c));
+        right.sourceOffsetFrames = c->sourceOffsetFrames + framesSpanning(p, s, atTick - s, mediaRate(p, *c));
         c->lengthTick = atTick - s;
         std::string id = right.id;
         t->audioClips.push_back(right);
@@ -195,10 +194,65 @@ std::string importAudioClip(Project& p, const std::string& packageDir, const std
     c.id = newId();
     c.mediaId = mediaId;
     c.startTick = std::max<int64_t>(0, startTick);
-    c.lengthTick = std::max<int64_t>(kMinClipTicks, frameToTick(p, audio.frames(), audio.sampleRate));
+    c.lengthTick = std::max<int64_t>(kMinClipTicks, ticksSpanning(p, c.startTick, audio.frames(), audio.sampleRate));
     const std::string id = c.id;
     placeClipReplacing(p, *t, std::move(c));
     return id;
+}
+
+namespace {
+template <class F>
+void retempo(Project& p, F&& change) {
+    std::vector<double> durations;  // audio clips' real durations under the old tempo map
+    {
+        const TempoMap before(p);
+        for (auto& t : p.tracks)
+            for (auto& c : t.audioClips)
+                durations.push_back(before.tickToSeconds(static_cast<double>(c.startTick + c.lengthTick)) -
+                                    before.tickToSeconds(static_cast<double>(c.startTick)));
+    }
+    change();
+    std::stable_sort(p.tempoChanges.begin(), p.tempoChanges.end(),
+                     [](const TempoChange& a, const TempoChange& b) { return a.tick < b.tick; });
+    const TempoMap after(p);
+    size_t i = 0;
+    for (auto& t : p.tracks)
+        for (auto& c : t.audioClips) {
+            const double start = after.tickToSeconds(static_cast<double>(c.startTick));
+            const auto end = static_cast<int64_t>(std::llround(after.secondsToTick(start + durations[i++])));
+            c.lengthTick = std::max<int64_t>(kMinClipTicks, end - c.startTick);
+        }
+}
+}  // namespace
+
+void setTempo(Project& p, double bpm) {
+    bpm = std::clamp(bpm, kMinBpm, kMaxBpm);
+    retempo(p, [&] { p.tempoBpm = bpm; });
+}
+
+bool setTempoChange(Project& p, int64_t tick, double bpm) {
+    if (tick <= 0) {
+        setTempo(p, bpm);
+        return true;
+    }
+    bpm = std::clamp(bpm, kMinBpm, kMaxBpm);
+    retempo(p, [&] {
+        for (auto& c : p.tempoChanges)
+            if (c.tick == tick) {
+                c.bpm = bpm;
+                return;
+            }
+        p.tempoChanges.push_back({tick, bpm});
+    });
+    return true;
+}
+
+bool removeTempoChange(Project& p, int64_t tick) {
+    auto it = std::find_if(p.tempoChanges.begin(), p.tempoChanges.end(),
+                           [&](const TempoChange& c) { return c.tick == tick; });
+    if (it == p.tempoChanges.end()) return false;
+    retempo(p, [&] { p.tempoChanges.erase(it); });
+    return true;
 }
 
 const std::vector<std::string>& trackPalette() {

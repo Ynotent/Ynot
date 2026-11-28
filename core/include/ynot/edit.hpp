@@ -64,6 +64,12 @@ bool moveInsert(Project& p, const std::string& trackId, const std::string& plugi
 std::string importAudioClip(Project& p, const std::string& packageDir, const std::string& trackId,
                             const AudioBuffer& audio, int64_t startTick);
 
+// Tempo. Clips stay on their bars and beats. Audio clips keep their real duration (a tempo
+// change doesn't speed audio up; time stretch does), so their length in beats adjusts.
+void setTempo(Project& p, double bpm);                         // tempo at the start of the song
+bool setTempoChange(Project& p, int64_t tick, double bpm);     // add, or replace the one at `tick`
+bool removeTempoChange(Project& p, int64_t tick);
+
 // The colours new tracks cycle through (matches design/tokens.json trackPalette).
 const std::vector<std::string>& trackPalette();
 

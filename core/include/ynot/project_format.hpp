@@ -32,6 +32,8 @@ Track trackFromJson(const Json& j);
 // automation) — excludes mix-only fields and the freeze itself. Used to detect
 // stale freezes after the source track is edited.
 std::string trackFingerprint(const Track& t);
+// True if the track's freeze matches its current contents and the song's tempo map.
+bool hasFreshFreeze(const Project& p, const Track& t);
 
 // Package I/O.
 void saveProjectPackage(const Project& p, const std::string& dir);

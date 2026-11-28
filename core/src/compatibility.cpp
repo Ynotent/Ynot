@@ -27,6 +27,12 @@ int CompatReport::count(Severity s) const {
     return n;
 }
 
+bool hasFreshFreeze(const Project& p, const Track& t) {
+    // A freeze is audio: it goes stale when the track or the song's tempo changes.
+    return t.freeze && t.freeze->sourceFingerprint == trackFingerprint(t) &&
+           (t.freeze->tempoSignature.empty() || t.freeze->tempoSignature == p.tempoSignature());
+}
+
 namespace {
 
 std::vector<const PluginInstance*> activePlugins(const Track& t) {
@@ -37,9 +43,6 @@ std::vector<const PluginInstance*> activePlugins(const Track& t) {
     return v;
 }
 
-bool hasFreshFreeze(const Track& t) {
-    return t.freeze && t.freeze->sourceFingerprint == trackFingerprint(t);
-}
 
 std::string platformLabel(Platform p) {
     switch (p) {
@@ -85,7 +88,7 @@ CompatReport analyzeCompatibility(const Project& p, const DeviceCatalog& target)
         for (auto* pl : activePlugins(t))
             if (!target.has(*pl)) missing.push_back(pl);
 
-        bool fresh = hasFreshFreeze(t);
+        bool fresh = hasFreshFreeze(p, t);
         if (t.freeze && !fresh) {
             report.issues.push_back(
                 {Severity::Warning, IssueKind::StaleFreeze, t.id, t.name, "", "",
@@ -141,7 +144,7 @@ std::vector<std::string> tracksNeedingFreezeFor(const Project& p, const DeviceCa
                                                 const std::vector<DeviceCatalog>& targets) {
     std::vector<std::string> out;
     for (const Track* t : p.orderedTracks()) {
-        if (hasFreshFreeze(*t)) continue;
+        if (hasFreshFreeze(p, *t)) continue;
         auto plugins = activePlugins(*t);
         bool loadsHere = true, missingSomewhere = false;
         for (auto* pl : plugins) {
@@ -179,6 +182,7 @@ void freezeTrack(Project& p, const std::string& packageDir, const std::string& t
     FreezeInfo fi;
     fi.mediaId = mediaId;
     fi.sourceFingerprint = trackFingerprint(*t);
+    fi.tempoSignature = p.tempoSignature();
     fi.renderedOn = renderedOn;
     fi.renderedAt = isoNow();
     t->freeze = fi;

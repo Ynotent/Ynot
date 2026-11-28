@@ -178,11 +178,24 @@ void Recorder::cancel() {
 // ---------------------------------------------------------------- commit
 
 int64_t frameToTick(const Project& p, int64_t frame, double sr) {
-    return static_cast<int64_t>(std::llround(static_cast<double>(frame) / sr / p.secondsPerTick()));
+    return TempoMap(p).frameToTick(frame, sr);
+}
+
+int64_t ticksSpanning(const Project& p, int64_t startTick, int64_t frames, double sr) {
+    const TempoMap m(p);
+    const double start = m.tickToSeconds(static_cast<double>(startTick));
+    return static_cast<int64_t>(std::llround(m.secondsToTick(start + static_cast<double>(frames) / sr))) - startTick;
+}
+
+int64_t framesSpanning(const Project& p, int64_t startTick, int64_t ticks, double sr) {
+    const TempoMap m(p);
+    const double a = m.tickToSeconds(static_cast<double>(startTick));
+    const double b = m.tickToSeconds(static_cast<double>(startTick + ticks));
+    return static_cast<int64_t>(std::llround((b - a) * sr));
 }
 
 int64_t tickToFrame(const Project& p, int64_t tick, double sr) {
-    return static_cast<int64_t>(std::llround(static_cast<double>(tick) * p.secondsPerTick() * sr));
+    return TempoMap(p).tickToFrame(tick, sr);
 }
 
 const MediaRef& addMediaFile(Project& p, const std::string& packageDir, const std::string& wavPath,
@@ -225,7 +238,7 @@ void placeClipReplacing(const Project& p, Track& track, AudioClip clip) {
         if (ce <= s || cs >= e) { kept.push_back(c); continue; }
         const MediaRef* m = p.findMedia(c.mediaId);
         const double rate = m ? m->sampleRate : 48000.0;
-        auto framesFor = [&](int64_t ticks) { return tickToFrame(p, ticks, rate); };
+        auto framesFor = [&](int64_t ticks) { return framesSpanning(p, cs, ticks, rate); };
         if (cs >= s && ce <= e) continue;  // fully covered: removed
         if (cs < s && ce > e) {            // new clip lands inside: split around it
             AudioClip left = c, right = c;
@@ -274,7 +287,7 @@ std::vector<std::string> commitTakes(Project& p, const std::string& packageDir,
         // startFrame + i - latency, so skip the first `latency` samples.
         clip.sourceOffsetFrames = latencyFrames;
         clip.startTick = frameToTick(p, take.startFrame, take.sampleRate);
-        clip.lengthTick = frameToTick(p, take.frames - latencyFrames, take.sampleRate);
+        clip.lengthTick = ticksSpanning(p, clip.startTick, take.frames - latencyFrames, take.sampleRate);
         if (clip.lengthTick <= 0) continue;
         ids.push_back(clip.id);
         placeClipReplacing(p, *track, std::move(clip));

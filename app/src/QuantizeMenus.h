@@ -10,6 +10,11 @@
 
 namespace ynotapp {
 
+// "120" or "92.5": tempo for buttons, menus and the ruler.
+inline juce::String bpmText(double bpm) {
+    return juce::String(bpm, std::abs(bpm - std::round(bpm)) < 0.05 ? 0 : 1);
+}
+
 // Presets grouped by family. `ticked` marks the current choice; `offItem` adds "Off".
 inline juce::PopupMenu quantizePresetMenu(const std::string& ticked,
                                           std::function<void(const std::string& presetId)> onPick,

@@ -201,6 +201,17 @@ public:
                 g.drawText(juce::String(b / beatsPerBar + 1), static_cast<int>(x) + 4, 2, 40, 14,
                            juce::Justification::left);
         }
+        // Tempo changes: a marker with the new tempo.
+        g.setFont(juce::FontOptions(th.bodySize - 2.f));
+        for (const auto& c : p.tempoChanges) {
+            const float x = static_cast<float>(owner_.tickToX(c.tick));
+            if (x < owner_.laneX0() || x > static_cast<float>(getWidth())) continue;
+            g.setColour(th.secondary);
+            g.fillRect(juce::Rectangle<float>(x - 1.f, 14.f, 2.f, 9.f));
+            g.drawText(bpmText(c.bpm), static_cast<int>(x) + 3, 13, 48, 11,
+                       juce::Justification::left);
+        }
+        g.setFont(juce::FontOptions(th.bodySize - 1.f));
         // Time signature at the left edge.
         g.setColour(th.textMuted);
         g.drawText(juce::String(p.timeSigNumerator) + "/" + juce::String(p.timeSigDenominator),
@@ -512,15 +523,16 @@ private:
             const auto* peaks = owner_.peaksFor(audio->mediaId);
             const auto* m = owner_.session_.project().findMedia(audio->mediaId);
             if (peaks && m && !peaks->empty()) {
-                const double secondsPerTick = owner_.session_.project().secondsPerTick();
+                const ynot::TempoMap tempo(owner_.session_.project());
+                const double startSeconds = tempo.tickToSeconds(static_cast<double>(start));
                 const double gain = ynot::dbToGain(audio->gainDb);
                 const float mid = inner.getCentreY(), half = inner.getHeight() / 2.f;
                 const int px0 = std::max(static_cast<int>(inner.getX()), lane.getX());
                 const int px1 = std::min(static_cast<int>(inner.getRight()), lane.getRight());
                 for (int px = px0; px < px1; ++px) {
                     auto frameAt = [&](double x) {
-                        const double tick = static_cast<double>(owner_.xToTick(x) - start);
-                        return static_cast<double>(audio->sourceOffsetFrames) + tick * secondsPerTick * m->sampleRate;
+                        const double seconds = tempo.tickToSeconds(static_cast<double>(owner_.xToTick(x))) - startSeconds;
+                        return static_cast<double>(audio->sourceOffsetFrames) + seconds * m->sampleRate;
                     };
                     const auto b0 = static_cast<size_t>(std::max(0.0, frameAt(px) / 256.0));
                     const auto b1 = std::max(b0 + 1, static_cast<size_t>(std::max(0.0, frameAt(px + 1) / 256.0)));
@@ -1042,10 +1054,16 @@ void ArrangeView::stretchClip(const std::string& trackId, const std::string& cli
     });
 }
 
+int64_t ArrangeView::clipStartTick(const std::string& trackId, const std::string& clipId) const {
+    auto span = ynot::findClip(session_.project(), trackId, clipId);
+    return span ? span->startTick : 0;
+}
+
 void ArrangeView::matchTempoDialog(const std::string& trackId, const std::string& clipId, ynot::StretchMode mode) {
     auto* w = new juce::AlertWindow("Match tempo",
                                     "What tempo was this audio recorded at? It will be stretched to play at " +
-                                        juce::String(session_.project().tempoBpm, 1) + " BPM.",
+                                        juce::String(session_.project().tempoAt(clipStartTick(trackId, clipId)), 1) +
+                                        " BPM.",
                                     juce::MessageBoxIconType::NoIcon);
     w->addTextEditor("bpm", "", "Original BPM");
     w->addButton("Stretch", 1, juce::KeyPress(juce::KeyPress::returnKey));
@@ -1059,7 +1077,8 @@ void ArrangeView::matchTempoDialog(const std::string& trackId, const std::string
                                                    "Enter a tempo between 20 and 400 BPM.");
             return;
         }
-        safe->stretchClip(trackId, clipId, ynot::ratioForTempo(safe->session_.project(), bpm), mode);
+        safe->stretchClip(trackId, clipId,
+                          ynot::ratioForTempo(safe->session_.project(), bpm, safe->clipStartTick(trackId, clipId)), mode);
     }), true);
 }
 

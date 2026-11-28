@@ -41,6 +41,7 @@ public:
     void renameTrackDialog(const std::string& trackId, const std::string& current);
     // Time stretch (ratio relative to the clip's original length); errors are shown in a dialog.
     void stretchClip(const std::string& trackId, const std::string& clipId, double ratio, ynot::StretchMode mode);
+    int64_t clipStartTick(const std::string& trackId, const std::string& clipId) const;
     void matchTempoDialog(const std::string& trackId, const std::string& clipId, ynot::StretchMode mode);
     void customStretchDialog(const std::string& trackId, const std::string& clipId, ynot::StretchMode mode,
                              double currentRatio);

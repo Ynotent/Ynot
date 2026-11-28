@@ -195,16 +195,14 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
     opts_ = opts;
     tracks_.clear();
     issues_.clear();
-    secondsPerTick_ = project.secondsPerTick();
+    tempo_ = TempoMap(project);
     beatsPerBar_ = std::max(1, project.timeSigNumerator);
     beatTicks_ = project.beatTicks();
     clickRemaining_ = 0;
     scratchL_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
     scratchR_.assign(static_cast<size_t>(opts.maxBlock), 0.f);
     const double sr = opts.sampleRate;
-    auto tickToFrame = [&](int64_t tick) {
-        return static_cast<int64_t>(std::llround(static_cast<double>(tick) * secondsPerTick_ * sr));
-    };
+    auto tickToFrame = [&](int64_t tick) { return tempo_.tickToFrame(tick, sr); };
 
     bool isolate = !opts.isolateTrackPreFader.empty();
     bool anySolo = false;
@@ -239,7 +237,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
             if (!useFreeze)
                 issues_.push_back({t.id, "Frozen audio for '" + t.name +
                                              "' is missing on this device; trying live processing."});
-            else if (t.freeze->sourceFingerprint != trackFingerprint(t))
+            else if (!hasFreshFreeze(project, t))
                 issues_.push_back({t.id, "Freeze of '" + t.name +
                                              "' is older than the latest edits; refreeze to update."});
         }
@@ -262,7 +260,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
             // computed from the exact (fractional) start time, so splitting a clip never
             // shifts the audio after the split point.
             const int64_t startFrame = tickToFrame(c.startTick);
-            const double exactStart = static_cast<double>(c.startTick) * secondsPerTick_ * sr;
+            const double exactStart = tempo_.tickToSeconds(static_cast<double>(c.startTick)) * sr;
             const double ratio = b->sampleRate / sr;
             const double srcOffset =
                 static_cast<double>(c.sourceOffsetFrames) + (static_cast<double>(startFrame) - exactStart) * ratio;
@@ -341,7 +339,7 @@ void Engine::process(float* left, float* right, int frames, const float* const* 
     std::fill(right, right + frames, 0.f);
     const int64_t blockStart = pos_, blockEnd = pos_ + frames;
     const double sr = opts_.sampleRate;
-    const int64_t blockTick = static_cast<int64_t>(static_cast<double>(blockStart) / sr / secondsPerTick_);
+    const auto blockTick = static_cast<int64_t>(tempo_.secondsToTick(static_cast<double>(blockStart) / sr));
 
     for (auto& tsp : tracks_) {
         TrackState& ts = *tsp;
@@ -441,11 +439,15 @@ void Engine::process(float* left, float* right, int frames, const float* const* 
 
 void Engine::renderClick(float* left, float* right, int frames, int64_t blockStart) {
     const double sr = opts_.sampleRate;
-    const double framesPerBeat = static_cast<double>(beatTicks_) * secondsPerTick_ * sr;  // time-signature beat
     const int clickLen = static_cast<int>(0.03 * sr);  // 30 ms
-    // First beat at or after the block start.
-    auto beat = static_cast<int64_t>(std::ceil(static_cast<double>(blockStart) / framesPerBeat));
-    int64_t nextBeatFrame = static_cast<int64_t>(std::llround(static_cast<double>(beat) * framesPerBeat));
+    // Beats are time-signature beats in musical time; the tempo map places them in frames.
+    const auto bt = static_cast<double>(beatTicks_);
+    auto beat = static_cast<int64_t>(std::ceil(tempo_.secondsToTick(static_cast<double>(blockStart) / sr) / bt - 1e-9));
+    auto frameOfBeat = [&](int64_t b) {
+        return static_cast<int64_t>(std::llround(tempo_.tickToSeconds(static_cast<double>(b) * bt) * sr));
+    };
+    int64_t nextBeatFrame = frameOfBeat(beat);
+    if (nextBeatFrame < blockStart) nextBeatFrame = frameOfBeat(++beat);
     for (int i = 0; i < frames; ++i) {
         if (blockStart + i == nextBeatFrame) {
             const bool downbeat = beat % beatsPerBar_ == 0;
@@ -453,7 +455,7 @@ void Engine::renderClick(float* left, float* right, int frames, int64_t blockSta
             clickPhase_ = 0;
             clickRemaining_ = clickLen;
             ++beat;
-            nextBeatFrame = static_cast<int64_t>(std::llround(static_cast<double>(beat) * framesPerBeat));
+            nextBeatFrame = frameOfBeat(beat);
         }
         if (clickRemaining_ > 0) {
             const double env = static_cast<double>(clickRemaining_) / clickLen;
@@ -473,7 +475,7 @@ AudioBuffer renderWith(const Project& p, MediaProvider& media, PluginHost& host,
     e.prepare(p, media, host, opts);
     if (issues) *issues = e.issues();
     auto total = static_cast<int64_t>(
-        std::ceil((static_cast<double>(p.endTick()) * p.secondsPerTick() + tailSeconds) * opts.sampleRate));
+        std::ceil((p.tickToSeconds(static_cast<double>(p.endTick())) + tailSeconds) * opts.sampleRate));
     AudioBuffer out;
     out.sampleRate = opts.sampleRate;
     out.channels = 2;

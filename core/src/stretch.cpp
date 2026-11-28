@@ -320,7 +320,7 @@ bool originalRegion(const Project& p, const AudioClip& c, const MediaRef** orig,
     *orig = p.findMedia(stretched ? c.stretchSourceMediaId : c.mediaId);
     if (!*orig) return false;
     const double prevRatio = clipStretchRatio(c);
-    const double visible = static_cast<double>(tickToFrame(p, c.lengthTick, (*orig)->sampleRate));
+    const double visible = static_cast<double>(framesSpanning(p, c.startTick, c.lengthTick, (*orig)->sampleRate));
     *start = stretched ? c.stretchSourceOffsetFrames + std::llround(static_cast<double>(c.sourceOffsetFrames) / prevRatio)
                        : c.sourceOffsetFrames;
     *start = std::clamp<int64_t>(*start, 0, (*orig)->frames);
@@ -432,7 +432,7 @@ bool commitStretch(Project& p, const std::string& packageDir, const StretchJob& 
         if (!originalRegion(p, *cur, &o, &start, &length)) return false;
         c.mediaId = job.sourceMediaId;
         c.sourceOffsetFrames = start;
-        c.lengthTick = std::max<int64_t>(kMinClipTicks, frameToTick(p, length, orig->sampleRate));
+        c.lengthTick = std::max<int64_t>(kMinClipTicks, ticksSpanning(p, c.startTick, length, orig->sampleRate));
         c.stretchSourceMediaId.clear();
         c.stretchSourceOffsetFrames = 0;
         c.stretchRatio = 1.0;
@@ -441,7 +441,7 @@ bool commitStretch(Project& p, const std::string& packageDir, const StretchJob& 
         if (rendered.frames() <= 0) return false;
         c.mediaId = addMedia(p, packageDir, rendered, "stretch").id;
         c.sourceOffsetFrames = 0;
-        c.lengthTick = std::max<int64_t>(kMinClipTicks, frameToTick(p, rendered.frames(), rendered.sampleRate));
+        c.lengthTick = std::max<int64_t>(kMinClipTicks, ticksSpanning(p, c.startTick, rendered.frames(), rendered.sampleRate));
         c.stretchSourceMediaId = job.sourceMediaId;
         c.stretchSourceOffsetFrames = job.sourceOffsetFrames;
         c.stretchRatio = job.ratio;
@@ -462,19 +462,25 @@ bool stretchClip(Project& p, const std::string& packageDir, MediaProvider& media
     return commitStretch(p, packageDir, *job, renderStretch(*job));
 }
 
-double ratioForTempo(const Project& p, double sourceBpm) {
-    if (sourceBpm <= 0 || p.tempoBpm <= 0) return 1.0;
-    return std::clamp(sourceBpm / p.tempoBpm, kMinStretchRatio, kMaxStretchRatio);
+double ratioForTempo(const Project& p, double sourceBpm, int64_t atTick) {
+    const double bpm = p.tempoAt(atTick);
+    if (sourceBpm <= 0 || bpm <= 0) return 1.0;
+    return std::clamp(sourceBpm / bpm, kMinStretchRatio, kMaxStretchRatio);
 }
 
 double ratioToFitBars(const Project& p, const AudioClip& c) {
     const MediaRef* orig = nullptr;
     int64_t start = 0, length = 0;
     if (!originalRegion(p, c, &orig, &start, &length)) return 1.0;
+    // Measured from where the clip sits, so tempo changes under it are respected.
     const double seconds = static_cast<double>(length) / orig->sampleRate;
-    const double barSeconds = static_cast<double>(p.barTicks()) * p.secondsPerTick();
-    const double bars = std::max(1.0, std::round(seconds / barSeconds));
-    return std::clamp(bars * barSeconds / seconds, kMinStretchRatio, kMaxStretchRatio);
+    const TempoMap m(p);
+    const double t0 = m.tickToSeconds(static_cast<double>(c.startTick));
+    const double ticks = m.secondsToTick(t0 + seconds) - static_cast<double>(c.startTick);
+    const auto barTicks = static_cast<double>(p.barTicks());
+    const double bars = std::max(1.0, std::round(ticks / barTicks));
+    const double target = m.tickToSeconds(static_cast<double>(c.startTick) + bars * barTicks) - t0;
+    return std::clamp(target / seconds, kMinStretchRatio, kMaxStretchRatio);
 }
 
 }  // namespace ynot

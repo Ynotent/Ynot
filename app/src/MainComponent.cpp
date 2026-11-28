@@ -43,7 +43,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
 
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
-                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &rateButton_, &addTrackButton_})
+                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_})
         addAndMakeVisible(*b);
     addTrackButton_.onClick = [this] {
         juce::PopupMenu m;
@@ -66,6 +66,12 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
         addTimeSignatureItems(m);
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(timeSigButton_));
     };
+    tempoButton_.setTooltip("Tempo at the playhead. Click to change it or add tempo changes.");
+    tempoButton_.onClick = [this] {
+        juce::PopupMenu m;
+        addTempoItems(m);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(tempoButton_));
+    };
     rateButton_.setTooltip("Sample rate");
     rateButton_.onClick = [this] {
         juce::PopupMenu m;
@@ -77,7 +83,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_,
-                    &rateButton_, &addTrackButton_})
+                    &tempoButton_, &rateButton_, &addTrackButton_})
         b->setMouseClickGrabsKeyboardFocus(false);
     // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
     // (play/stop) and Return (to start) still work while the keyboard has focus.
@@ -155,11 +161,11 @@ void MainComponent::resized() {
     std::vector<juce::TextButton*> toolbar{&playButton_, &recordButton_, &clickButton_};
     countInButton_.setVisible(!compact());
     monitorButton_.setVisible(!compact());
-    for (auto* b : {&quantizeButton_, &punchButton_, &timeSigButton_, &rateButton_, &addTrackButton_})
+    for (auto* b : {&quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_})
         b->setVisible(!compact());
     if (!compact()) {
         for (auto* b : {&countInButton_, &monitorButton_, &punchButton_, &quantizeButton_, &timeSigButton_,
-                        &rateButton_, &addTrackButton_})
+                        &tempoButton_, &rateButton_, &addTrackButton_})
             toolbar.push_back(b);
     }
     for (auto* b : {&keysButton_, &undoButton_, &redoButton_}) toolbar.push_back(b);
@@ -299,6 +305,8 @@ void MainComponent::refresh() {
         timeSigButton_.setButtonText(juce::String(session_.project().timeSigNumerator) + "/" +
                                      juce::String(session_.project().timeSigDenominator));
     rateButton_.setButtonText(JuceAudioDevice::rateLabel(session_.sampleRate()));
+    if (session_.hasProject())
+        tempoButton_.setButtonText(bpmText(session_.project().tempoAt(session_.positionTick())) + " BPM");
     rateButton_.setEnabled(!session_.isRecording());
     {
         const auto* preset = ynot::findQuantizePreset(session_.recordQuantizeId());
@@ -402,6 +410,9 @@ void MainComponent::showMoreMenu() {
         m.addSubMenu("Quantize", q);
         m.addSubMenu("Punch recording", punch);
         m.addSubMenu("Time signature", ts);
+        juce::PopupMenu tempo;
+        addTempoItems(tempo);
+        m.addSubMenu("Tempo", tempo, session_.hasProject());
         juce::PopupMenu rate;
         addSampleRateItems(rate);
         m.addSubMenu("Sample rate (" + JuceAudioDevice::rateLabel(session_.sampleRate()) + ")", rate,
@@ -514,6 +525,71 @@ void MainComponent::addTimeSignatureItems(juce::PopupMenu& m) {
                               session_.setTimeSignature(n, d);
                               refresh();
                           });
+}
+
+void MainComponent::askNumber(const juce::String& title, const juce::String& message, double initial, double lo,
+                              double hi, std::function<void(double)> onOk) {
+    auto* w = new juce::AlertWindow(title, message, juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor("value", bpmText(initial));
+    w->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<MainComponent> safe(this);
+    w->enterModalState(true, juce::ModalCallbackFunction::create([safe, w, title, lo, hi, onOk](int result) {
+        if (result != 1 || !safe) return;
+        const auto text = w->getTextEditorContents("value").retainCharacters("0123456789.");
+        const double v = text.getDoubleValue();
+        if (text.isEmpty() || v < lo || v > hi) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, title,
+                                                   "Enter a number from " + bpmText(lo) + " to " + bpmText(hi) + ".");
+            return;
+        }
+        onOk(v);
+        safe->focusSoon();
+    }), true);
+}
+
+void MainComponent::addTempoItems(juce::PopupMenu& m) {
+    if (!session_.hasProject()) return;
+    const auto& p = session_.project();
+    auto where = [&p](int64_t tick) {
+        const int64_t bar = tick / p.barTicks() + 1, beat = (tick % p.barTicks()) / p.beatTicks() + 1;
+        return "bar " + juce::String(bar) + (beat > 1 ? " beat " + juce::String(beat) : juce::String());
+    };
+    m.addItem("Song tempo: " + bpmText(p.tempoBpm) + " BPM...", [this] {
+        askNumber("Song tempo", "Tempo at the start of the song, in BPM (20 to 400).", session_.project().tempoBpm,
+                  ynot::kMinBpm, ynot::kMaxBpm, [this](double bpm) {
+                      session_.edit([bpm](ynot::Project& pr) { ynot::setTempo(pr, bpm); });
+                  });
+    });
+    // A change lands on the playhead's beat.
+    const int64_t at = ynot::snapTick(session_.positionTick(), p.beatTicks());
+    m.addItem("Change tempo at " + where(at) + " (playhead)...", at > 0, false, [this, at] {
+        askNumber("Tempo change", "New tempo from this point on, in BPM (20 to 400).",
+                  session_.project().tempoAt(at), ynot::kMinBpm, ynot::kMaxBpm, [this, at](double bpm) {
+                      session_.edit([at, bpm](ynot::Project& pr) { ynot::setTempoChange(pr, at, bpm); });
+                  });
+    });
+    if (!p.tempoChanges.empty()) {
+        m.addSeparator();
+        m.addSectionHeader("Tempo changes");
+        for (const auto& c : p.tempoChanges) {
+            juce::PopupMenu sub;
+            const int64_t tick = c.tick;
+            sub.addItem("Go there", [this, tick] { session_.seekToTick(tick); refresh(); });
+            sub.addItem("Change...", [this, tick, bpm = c.bpm] {
+                askNumber("Tempo change", "Tempo from this point on, in BPM (20 to 400).", bpm, ynot::kMinBpm,
+                          ynot::kMaxBpm, [this, tick](double v) {
+                              session_.edit([tick, v](ynot::Project& pr) { ynot::setTempoChange(pr, tick, v); });
+                          });
+            });
+            sub.addItem("Remove", [this, tick] {
+                session_.edit([tick](ynot::Project& pr) { ynot::removeTempoChange(pr, tick); });
+            });
+            m.addSubMenu(where(c.tick).replaceSection(0, 1, "B") + ": " + bpmText(c.bpm) + " BPM", sub);
+        }
+    }
+    m.addSeparator();
+    m.addItem("Audio keeps its length when the tempo changes; use Time stretch to fit it.", false, false, [] {});
 }
 
 void MainComponent::addSampleRateItems(juce::PopupMenu& m) {
