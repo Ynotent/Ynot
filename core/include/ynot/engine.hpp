@@ -39,6 +39,8 @@ public:
                          int numEvents) = 0;
     virtual void setParameter(const std::string& id, double normalizedValue) = 0;
     virtual void reset() = 0;
+    // Delay the processor adds (look-ahead). The engine compensates, so the track stays in time.
+    virtual int latencySamples() const { return 0; }
 };
 
 class PluginHost {
@@ -63,6 +65,7 @@ public:
 inline constexpr const char* kBuiltinSynth = "ynot.synth.basic";
 inline constexpr const char* kBuiltinGain = "ynot.fx.gain";
 inline constexpr const char* kBuiltinFilter = "ynot.fx.lowpass";
+// Also built in: kBuiltinDrums (drums.hpp) and kBuiltinTune (pitch_correct.hpp).
 
 // Supplies decoded media (cached) for the engine.
 class MediaProvider {

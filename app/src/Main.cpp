@@ -585,6 +585,31 @@ static int runSmokeTest(const juce::File& dir) {
         });
     }
 
+    {   // Ynot Tune loads as an insert and the track keeps playing (in time, via delay compensation).
+        session.edit([&](ynot::Project& p) {
+            auto fx = ynot::makeBuiltin(ynot::kBuiltinTune, "Ynot Tune");
+            fx.params["key"] = static_cast<int64_t>(9);  // A minor
+            fx.params["scale"] = static_cast<int64_t>(2);
+            ynot::addInsert(p, vocalsId, fx);
+        });
+        bool loaded = true;
+        for (const auto& i : session.engineIssues()) loaded &= i.message.find("Ynot Tune") == std::string::npos;
+        std::vector<float> silence(512), outL(512), outR(512);
+        const float* ins[2] = {silence.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        session.seekToTick(0);
+        session.play();
+        float pk = 0;
+        for (int b = 0; b < 100; ++b) {
+            session.processForTesting(ins, 2, outs, 2, 512);
+            for (float v : outL) pk = std::max(pk, std::abs(v));
+        }
+        session.stop();
+        expect(loaded && pk > 0.01f, "Ynot Tune loads on a vocal track and the track plays through it");
+        session.undo();
+        session.seekToTick(0);
+    }
+
     {   // Tempo: a change at bar 3 moves the playhead's time but not its bar; undo restores it.
         const int64_t bar3 = 2 * session.project().barTicks();
         session.seekToTick(bar3 + ynot::kTicksPerQuarter);

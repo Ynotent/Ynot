@@ -6,6 +6,7 @@
 #include <limits>
 
 #include "ynot/drums.hpp"
+#include "ynot/pitch_correct.hpp"
 #include "ynot/project_format.hpp"
 
 namespace ynot {
@@ -130,7 +131,7 @@ private:
 }  // namespace
 
 std::vector<std::string> BuiltinPluginHost::builtinIds() {
-    return {kBuiltinSynth, kBuiltinGain, kBuiltinFilter, kBuiltinDrums};
+    return {kBuiltinSynth, kBuiltinGain, kBuiltinFilter, kBuiltinDrums, kBuiltinTune};
 }
 
 bool BuiltinPluginHost::isAvailable(const PluginInstance& p) const {
@@ -143,6 +144,7 @@ std::unique_ptr<PluginProcessor> BuiltinPluginHost::load(const PluginInstance& p
     if (!isAvailable(p)) return nullptr;
     if (p.uid == kBuiltinSynth) return std::make_unique<BasicSynth>(p.params, sr);
     if (p.uid == kBuiltinDrums) return makeDrumKit(p.params, sr);
+    if (p.uid == kBuiltinTune) return makePitchCorrector(p.params, sr);
     if (p.uid == kBuiltinGain) return std::make_unique<GainFx>(p.params);
     if (p.uid == kBuiltinFilter) return std::make_unique<LowpassFx>(p.params, sr);
     return nullptr;
@@ -189,6 +191,7 @@ struct Engine::TrackState {
     std::vector<PluginAuto> pluginAutomation;
     std::vector<int> monitor;  // live input channels routed into this track
     bool liveMidi = false;     // plays live MIDI input
+    int64_t latency = 0;       // plugin delay on this track: sources are read this far ahead
 };
 
 Engine::Engine() = default;
@@ -315,6 +318,8 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
             }
             ts->inserts.push_back(std::move(proc));
         }
+        ts->latency = ts->instrument ? ts->instrument->latencySamples() : 0;
+        for (auto& ins : ts->inserts) ts->latency += ins->latencySamples();
         if (ts->instrument)
             for (auto& lane : t.automation) {
                 std::string prefix = "plugin:" + t.instrument->id + ":";
@@ -330,7 +335,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
 void Engine::seek(int64_t frame) {
     pos_ = frame;
     for (auto& ts : tracks_) {
-        auto it = std::lower_bound(ts->events.begin(), ts->events.end(), frame,
+        auto it = std::lower_bound(ts->events.begin(), ts->events.end(), frame + ts->latency,
                                    [](const TrackState::TimedEvent& e, int64_t f) { return e.frame < f; });
         ts->eventCursor = static_cast<size_t>(it - ts->events.begin());
         if (ts->instrument) ts->instrument->reset();
@@ -373,7 +378,7 @@ void Engine::setLoop(int64_t startTick, int64_t endTick, bool enabled) {
 void Engine::jumpTo(int64_t frame) {
     pos_ = frame;
     for (auto& ts : tracks_) {
-        auto it = std::lower_bound(ts->events.begin(), ts->events.end(), frame,
+        auto it = std::lower_bound(ts->events.begin(), ts->events.end(), frame + ts->latency,
                                    [](const TrackState::TimedEvent& e, int64_t f) { return e.frame < f; });
         ts->eventCursor = static_cast<size_t>(it - ts->events.begin());
         if (ts->instrument) ts->instrument->reset();  // release notes still sounding at the loop end
@@ -427,16 +432,18 @@ void Engine::processSegment(float* left, float* right, int frames, const float* 
         std::fill(l, l + frames, 0.f);
         std::fill(r, r + frames, 0.f);
 
-        // Audio sources (clips or frozen render), linear-interpolated resampling.
+        // Audio sources (clips or frozen render), linear-interpolated resampling. With plugin
+        // latency on the track, sources are read that far ahead so the output lands on time.
+        const int64_t srcStart = blockStart + ts.latency, srcEnd = blockEnd + ts.latency;
         for (auto& c : ts.clips) {
             if (!transportRunning) break;
-            if (c.endFrame <= blockStart || c.startFrame >= blockEnd) continue;
+            if (c.endFrame <= srcStart || c.startFrame >= srcEnd) continue;
             const AudioBuffer& b = *c.buf;
             const int64_t n = b.frames();
-            int from = static_cast<int>(std::max<int64_t>(0, c.startFrame - blockStart));
-            int to = static_cast<int>(std::min<int64_t>(frames, c.endFrame - blockStart));
+            int from = static_cast<int>(std::max<int64_t>(0, c.startFrame - srcStart));
+            int to = static_cast<int>(std::min<int64_t>(frames, c.endFrame - srcStart));
             for (int i = from; i < to; ++i) {
-                double src = c.srcOffset + static_cast<double>(blockStart + i - c.startFrame) * c.ratio;
+                double src = c.srcOffset + static_cast<double>(srcStart + i - c.startFrame) * c.ratio;
                 if (src < 0) continue;
                 int64_t i0 = static_cast<int64_t>(src);
                 if (i0 + 1 >= n) break;
@@ -470,9 +477,10 @@ void Engine::processSegment(float* left, float* right, int frames, const float* 
 
         if (ts.instrument) {
             ts.blockEvents.clear();
-            while (transportRunning && ts.eventCursor < ts.events.size() && ts.events[ts.eventCursor].frame < blockEnd) {
+            while (transportRunning && ts.eventCursor < ts.events.size() &&
+                   ts.events[ts.eventCursor].frame < blockEnd + ts.latency) {
                 auto e = ts.events[ts.eventCursor++];
-                e.ev.frameOffset = static_cast<int>(std::max<int64_t>(0, e.frame - blockStart));
+                e.ev.frameOffset = static_cast<int>(std::max<int64_t>(0, e.frame - ts.latency - blockStart));
                 ts.blockEvents.push_back(e.ev);
             }
             if (ts.liveMidi && liveMidi) {

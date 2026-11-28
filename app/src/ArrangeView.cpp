@@ -4,6 +4,7 @@
 
 #include "AudioImporter.h"
 #include "QuantizeMenus.h"
+#include "TunePanel.h"
 #include "ynot/edit.hpp"
 #include "ynot/drums.hpp"
 #include "ynot/stretch.hpp"
@@ -1009,8 +1010,13 @@ void ArrangeView::showTrackMenu(const std::string& trackId, juce::Component* tar
     auto pluginItems = [&](const ynot::PluginInstance& pl, bool isInstrument) {
         juce::PopupMenu sub;
         const bool builtin = pl.format == ynot::PluginFormat::Builtin;
-        sub.addItem(builtin ? "Open window (built-ins have no window yet)" : "Open window", !builtin, false,
-                    [&host, id = pl.id] { host.openEditor(id); });
+        if (pl.uid == ynot::kBuiltinTune)
+            sub.addItem("Open Ynot Tune...", [this, tid = track.id, pid = pl.id] {
+                TunePanel::show(session_, theme_, tid, pid);
+            });
+        else
+            sub.addItem(builtin ? "Open window (built-ins have no window yet)" : "Open window", !builtin, false,
+                        [&host, id = pl.id] { host.openEditor(id); });
         sub.addItem("Bypass", true, pl.bypassed, [&session, tid = track.id, pid = pl.id, b = pl.bypassed] {
             session.edit([&](ynot::Project& p) { ynot::setPluginBypassed(p, tid, pid, !b); });
         });
@@ -1068,6 +1074,15 @@ void ArrangeView::showTrackMenu(const std::string& trackId, juce::Component* tar
     });
     addFx.addItem("Lowpass filter (built-in)", [&session, tid = track.id] {
         session.edit([&](ynot::Project& p) { ynot::addInsert(p, tid, ynot::makeBuiltin(ynot::kBuiltinFilter, "Lowpass")); });
+    });
+    addFx.addItem("Ynot Tune: pitch correction (built-in)", [this, &session, tid = track.id] {
+        std::string pid;
+        session.edit([&](ynot::Project& p) {
+            auto fx = ynot::makeBuiltin(ynot::kBuiltinTune, "Ynot Tune");
+            pid = fx.id;
+            ynot::addInsert(p, tid, fx);
+        });
+        if (!pid.empty()) TunePanel::show(session_, theme_, tid, pid);
     });
     addFx.addSeparator();
     addFx.addSubMenu("Installed effects",

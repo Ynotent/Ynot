@@ -15,6 +15,7 @@ set(YNOT_APP_SOURCES
     src/ArrangeView.cpp
     src/MixerView.cpp
     src/StepSequencerView.cpp
+    src/TunePanel.cpp
     src/PluginSandbox.cpp
     src/AudioImporter.cpp
     src/AudioExporter.cpp

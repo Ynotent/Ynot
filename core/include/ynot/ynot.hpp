@@ -14,6 +14,7 @@
 #include "ynot/midi_recorder.hpp"
 #include "ynot/model.hpp"
 #include "ynot/platform.hpp"
+#include "ynot/pitch_correct.hpp"
 #include "ynot/project_format.hpp"
 #include "ynot/quantize.hpp"
 #include "ynot/recorder.hpp"
