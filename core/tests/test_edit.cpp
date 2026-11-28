@@ -27,7 +27,7 @@ Project editProject() {
     Track k;
     k.id = "k";
     k.kind = TrackKind::Instrument;
-    k.midiClips = {{"mc", 0, 4 * kBeat, {{0, kBeat, 60, 100}, {2 * kBeat, kBeat, 64, 100}}, std::nullopt}};
+    k.midiClips = {{"mc", 0, 4 * kBeat, {{0, kBeat, 60, 100}, {2 * kBeat, kBeat, 64, 100}}, std::nullopt, {}}};
     p.tracks = {a, b, k};
     return p;
 }
@@ -175,7 +175,7 @@ TEST("tracks: add, rename, remove; instrument tracks start with a working synth"
     CHECK(p.findTrack(inst)->color != p.findTrack(aud)->color);
 
     // The new instrument track plays notes straight away.
-    p.findTrack(inst)->midiClips = {{"m", 0, kBeat, {{0, kBeat / 2, 60, 100}}, std::nullopt}};
+    p.findTrack(inst)->midiClips = {{"m", 0, kBeat, {{0, kBeat / 2, 60, 100}}, std::nullopt, {}}};
     for (auto& t : p.tracks) t.mute = t.id != inst;
     PackageMediaProvider media(th::tempDir("addtrack"));
     BuiltinPluginHost host;

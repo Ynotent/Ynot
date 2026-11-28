@@ -27,12 +27,14 @@ void MidiTakeRecorder::capture(const MidiEvent* events, int numEvents, int64_t b
         // but a note that starts in the count-in isn't part of it, so drop both kinds there.
         // Note-offs after punch-out are kept so notes played inside the range get their ends;
         // buildMidiClip trims them to the clip.
-        if (frame < startAt_ || (frame >= stopAt_ && events[i].noteOn)) continue;
+        const bool note = events[i].isNote();
+        if (frame < startAt_ || (frame >= stopAt_ && (events[i].noteOn || !note))) continue;
         if (n >= events_.size()) {
             dropped_.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
-        events_[n++] = {frame, events[i].noteOn && events[i].velocity > 0, events[i].pitch, events[i].velocity};
+        events_[n++] = {frame, note && events[i].noteOn && events[i].velocity > 0, events[i].pitch,
+                        events[i].velocity, events[i].kind};
     }
     count_.store(n, std::memory_order_release);
 }
@@ -71,6 +73,14 @@ std::optional<MidiClip> buildMidiClip(const Project& p, const std::vector<TimedM
                      [](const TimedMidiEvent& a, const TimedMidiEvent& b) { return a.frame < b.frame; });
     for (const auto& e : sorted) {
         const int64_t tick = frameToTick(p, e.frame, sampleRate);
+        if (e.kind != MidiEvent::Kind::Note) {  // pitch bend, mod wheel, sustain pedal...
+            if (tick >= clipStart && tick < clipEnd)
+                clip.controls.push_back({tick - clipStart,
+                                         e.kind == MidiEvent::Kind::PitchBend ? MidiControl::Kind::PitchBend
+                                                                               : MidiControl::Kind::Control,
+                                         e.pitch, e.velocity});
+            continue;
+        }
         if (e.noteOn) {
             close(e.pitch, tick);  // re-struck note: end the previous one here
             held[e.pitch] = {tick, std::clamp(e.velocity, 1, 127)};
@@ -79,7 +89,7 @@ std::optional<MidiClip> buildMidiClip(const Project& p, const std::vector<TimedM
         }
     }
     while (!held.empty()) close(held.begin()->first, clipEnd);  // still held at stop
-    if (clip.notes.empty()) return std::nullopt;
+    if (clip.notes.empty() && clip.controls.empty()) return std::nullopt;
     if (quantize) quantizeClip(clip, *quantize);
     std::sort(clip.notes.begin(), clip.notes.end(), [](const MidiNote& a, const MidiNote& b) {
         return a.tick != b.tick ? a.tick < b.tick : a.pitch < b.pitch;
@@ -105,6 +115,14 @@ std::optional<MidiClip> buildCycleMidiClip(const Project& p, const std::vector<T
         folded.push_back({std::min(at + std::max<int64_t>(1, off - on), loopEndFrame), false, pitch, 0});
     };
     for (const auto& e : sorted) {
+        if (e.kind != MidiEvent::Kind::Note) {  // controls fold into the loop like notes
+            if (e.frame >= loopStartFrame) {
+                auto c = e;
+                c.frame = loopStartFrame + (e.frame - loopStartFrame) % len;
+                folded.push_back(c);
+            }
+            continue;
+        }
         auto it = held.find(e.pitch);
         if (it != held.end()) {  // note-off, or a re-struck note ending the previous one
             addNote(e.pitch, it->second.first, e.frame, it->second.second);

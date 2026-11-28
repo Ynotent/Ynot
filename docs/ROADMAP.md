@@ -219,9 +219,16 @@ Done so far (built and tested on the Linux dev host only):
   time counter; Save/Saved indicator and "(edited)" in the window title; track inspector on
   the left; device-compatibility panel moved to View (summary chip in the transport bar).
   Original Ynot styling; not a copy of Pro Tools' or Logic's look.
-- Verified for all of the above: core unit tests (102) and app smoke tests on Linux, plus
+- **MIDI controllers (built for the Akai MPK25, works with any class-compliant controller):**
+  pitch bend (±2 semitones on Ynot Synth), mod wheel (vibrato), sustain pedal; all recorded
+  into MIDI clips, saved, and passed to third-party instruments. MIDI Learn: right-click a
+  mixer fader or pan knob (or Transport > MIDI Controller) and turn a knob; assignments are
+  per computer and follow mixer channel numbers. Transport buttons via MMC (the MPK25
+  default) or learned CC buttons. Optional MIDI clock out (24 ppq, Start/Stop/Song Position)
+  so the controller's arpeggiator and note repeat follow the tempo.
+- Verified for all of the above: core unit tests (106) and app smoke tests on Linux, plus
   UI checks on a virtual display. Not yet verified by ear or on real interfaces: the drum
-  sounds, Ynot Tune on real vocals, M4A/MP3 encoding on real Macs/PCs, multi-channel
+  sounds, Ynot Tune on real vocals, a real MPK25, M4A/MP3 encoding on real Macs/PCs, multi-channel
   interfaces, and buffer/rate changes on hardware.
 
 - **Downloadable Mac app:**

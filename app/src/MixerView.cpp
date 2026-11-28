@@ -84,6 +84,26 @@ private:
 
 // ------------------------------------------------------------------ strip
 
+// A slider whose right-click opens a menu (MIDI Learn) instead of moving it.
+class LearnableSlider : public juce::Slider {
+public:
+    std::function<void()> onRightClick;
+    void mouseDown(const juce::MouseEvent& e) override {
+        if (e.mods.isPopupMenu() && onRightClick) {
+            popup_ = true;
+            onRightClick();
+            return;
+        }
+        popup_ = false;
+        juce::Slider::mouseDown(e);
+    }
+    void mouseDrag(const juce::MouseEvent& e) override { if (!popup_) juce::Slider::mouseDrag(e); }
+    void mouseUp(const juce::MouseEvent& e) override { if (!popup_) juce::Slider::mouseUp(e); popup_ = false; }
+
+private:
+    bool popup_ = false;
+};
+
 class MixerView::Strip : public juce::Component {
 public:
     // trackId empty = master.
@@ -151,7 +171,58 @@ public:
         }
         fader_.setMouseClickGrabsKeyboardFocus(false);
         pan_.setMouseClickGrabsKeyboardFocus(false);
+        fader_.onRightClick = [this] {
+            showLearnMenu(id_.empty() ? MidiTarget::MasterVolume : MidiTarget::TrackVolume, fader_);
+        };
+        pan_.onRightClick = [this] { showLearnMenu(MidiTarget::TrackPan, pan_); };
         update();
+    }
+
+    int trackIndex() const {
+        const auto& tracks = session_.project().tracks;
+        for (size_t i = 0; i < tracks.size(); ++i)
+            if (tracks[i].id == id_) return static_cast<int>(i);
+        return 0;
+    }
+
+    // MIDI Learn: right-click a fader or pan knob, choose MIDI Learn, then move a knob.
+    void showLearnMenu(MidiTarget target, juce::Component& where) {
+        auto& mc = session_.midiControls();
+        const int idx = trackIndex();
+        const auto mapped = mc.mappingFor(target, idx);
+        juce::PopupMenu m;
+        m.addSectionHeader(mapped ? "Controlled by CC " + juce::String(mapped->cc) + " (channel " +
+                                        juce::String(mapped->channel) + ")"
+                                  : juce::String("Not assigned to a controller"));
+        juce::Component::SafePointer<Strip> safe(this);
+        if (mc.isLearning(target, idx))
+            m.addItem("Cancel MIDI Learn", [safe] { if (safe) { safe->session_.midiControls().cancelLearning(); safe->repaint(); } });
+        else
+            m.addItem("MIDI Learn (then turn a knob on your controller)", [safe, target, idx] {
+                if (!safe) return;
+                safe->session_.midiControls().startLearning(target, idx);
+                safe->repaint();
+            });
+        m.addItem("Forget MIDI Assignment", mapped.has_value(), false, [safe, target, idx] {
+            if (!safe) return;
+            safe->session_.midiControls().forget(target, idx);
+            safe->repaint();
+        });
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&where));
+    }
+
+    void paintOverChildren(juce::Graphics& g) override {
+        auto& mc = session_.midiControls();
+        const int idx = trackIndex();
+        auto badge = [&](MidiTarget t, juce::Rectangle<int> area) {
+            const bool learning = mc.isLearning(t, idx);
+            if (!learning && !mc.mappingFor(t, idx)) return;
+            g.setColour(learning ? theme_.record : theme_.accent);
+            g.setFont(juce::FontOptions(theme_.bodySize - 4.f, juce::Font::bold));
+            g.drawText(learning ? "LEARN" : "MIDI", area.removeFromTop(12), juce::Justification::centredRight);
+        };
+        badge(id_.empty() ? MidiTarget::MasterVolume : MidiTarget::TrackVolume, fader_.getBounds());
+        if (!id_.empty()) badge(MidiTarget::TrackPan, pan_.getBounds());
     }
 
     const std::string& trackId() const { return id_; }
@@ -232,7 +303,7 @@ private:
     const Theme& theme_;
     std::string id_;
     juce::Label name_, panText_;
-    juce::Slider fader_, pan_;
+    LearnableSlider fader_, pan_;
     juce::TextButton mute_{"M"}, solo_{"S"};
     Meter meter_;
     juce::Colour color_;

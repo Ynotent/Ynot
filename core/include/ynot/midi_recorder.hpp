@@ -20,10 +20,15 @@
 namespace ynot {
 
 struct TimedMidiEvent {
-    int64_t frame;  // engine frame
-    bool noteOn;
-    int pitch;
-    int velocity;
+    int64_t frame = 0;  // engine frame
+    bool noteOn = false;
+    int pitch = 0;      // notes: note number; controls: CC number
+    int velocity = 0;   // notes: velocity; controls: value; pitch bend: 0..16383
+    MidiEvent::Kind kind = MidiEvent::Kind::Note;
+
+    TimedMidiEvent() = default;
+    TimedMidiEvent(int64_t f, bool on, int note, int vel, MidiEvent::Kind k = MidiEvent::Kind::Note)
+        : frame(f), noteOn(on), pitch(note), velocity(vel), kind(k) {}
 };
 
 class MidiTakeRecorder {

@@ -94,6 +94,7 @@ if(YNOT_BUILD_TESTS)
         core/tests/test_mixer.cpp
         core/tests/test_drums.cpp
         core/tests/test_tune.cpp
+        core/tests/test_midi_controls.cpp
     )
     target_link_libraries(ynot_core_tests PRIVATE ynot_core)
     add_test(NAME ynot_core_tests COMMAND ynot_core_tests)

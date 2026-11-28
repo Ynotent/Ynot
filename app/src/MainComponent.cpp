@@ -178,6 +178,8 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     };
     arrange_.onImportRequest = [this](const std::string& trackId) { importAudio(trackId); };
     session_.onChange = [this] { refresh(); };
+    // Controller transport buttons (MMC from an Akai MPK and similar, or learned CC buttons).
+    session_.onTransportCommand = [this](TransportCommand c) { handleTransport(c); };
     setSize(1280, 800);
     refresh();
     startTimerHz(10);
@@ -561,6 +563,71 @@ void MainComponent::togglePlay() {
     refresh();
 }
 
+void MainComponent::handleTransport(TransportCommand c) {
+    if (!session_.hasProject()) return;
+    const int64_t bar = session_.project().barTicks();
+    switch (c) {
+        case TransportCommand::Play:
+            if (!session_.isPlaying() && !session_.isRecording()) session_.play();
+            break;
+        case TransportCommand::Stop:
+        case TransportCommand::Pause:
+            if (session_.isRecording()) toggleRecording();
+            else if (session_.isPlaying()) session_.stop();
+            else session_.seekToTick(0);  // Stop while stopped: back to the start
+            break;
+        case TransportCommand::Record:
+            if (!session_.isRecording()) toggleRecording();
+            break;
+        case TransportCommand::RecordExit:
+            if (session_.isRecording()) toggleRecording();
+            break;
+        case TransportCommand::Rewind:
+        case TransportCommand::FastForward:
+            if (session_.isRecording()) break;
+            {
+                // Move one bar, landing on bar lines.
+                const int64_t at = session_.positionTick();
+                int64_t to = (at / bar) * bar;
+                if (c == TransportCommand::FastForward) to += bar;
+                else if (to == at || at - to < bar / 8) to -= bar;
+                session_.seekToTick(std::max<int64_t>(0, to));
+            }
+            break;
+    }
+    arrange_.repaint();
+    refresh();
+}
+
+void MainComponent::addMidiControllerItems(juce::PopupMenu& m) {
+    auto& mc = session_.midiControls();
+    m.addSectionHeader(juce::String(session_.numMidiInputs()) + " MIDI input" +
+                       (session_.numMidiInputs() == 1 ? "" : "s") + " connected");
+    m.addItem("Send MIDI Clock (sync arpeggiators and note repeat)", true, session_.midiClockOut(),
+              [this] { session_.setMidiClockOut(!session_.midiClockOut()); });
+    m.addSeparator();
+    m.addSectionHeader("Transport buttons (MMC works automatically)");
+    const std::pair<MidiTarget, const char*> buttons[] = {{MidiTarget::Play, "Play"},
+                                                          {MidiTarget::Stop, "Stop"},
+                                                          {MidiTarget::Record, "Record"},
+                                                          {MidiTarget::Rewind, "Rewind"},
+                                                          {MidiTarget::FastForward, "Fast Forward"}};
+    for (const auto& [target, name] : buttons) {
+        const auto mapped = mc.mappingFor(target, 0);
+        juce::String text = juce::String("Learn ") + name + " Button";
+        if (mapped) text << "   (CC " << mapped->cc << ")";
+        m.addItem(text, true, mc.isLearning(target, 0), [this, t = target] { session_.midiControls().startLearning(t, 0); });
+    }
+    m.addSeparator();
+    m.addItem("Learn Master Volume", true, mc.isLearning(MidiTarget::MasterVolume, 0),
+              [this] { session_.midiControls().startLearning(MidiTarget::MasterVolume, 0); });
+    m.addItem("Cancel MIDI Learn", mc.isLearning(), false, [this] { session_.midiControls().cancelLearning(); refresh(); });
+    m.addItem("Clear All MIDI Assignments", !mc.mappings().empty(), false, [this] {
+        session_.midiControls().clear();
+        refresh();
+    });
+}
+
 void MainComponent::newDemo() {
     auto dir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
                    .getChildFile("Ynot").getNonexistentChildFile("Demo Song", ".ynot");
@@ -695,6 +762,9 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&) {
             m.addSubMenu("Tempo", tempo, hasSong);
             m.addSubMenu("Time Signature", ts, hasSong);
             m.addSubMenu("Sample Rate", rate);
+            juce::PopupMenu midi;
+            addMidiControllerItems(midi);
+            m.addSubMenu("MIDI Controller", midi);
             break;
         }
         case 4: {  // View

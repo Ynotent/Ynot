@@ -11,6 +11,8 @@ set(YNOT_APP_SOURCES
     src/JuceAudioDevice.cpp
     src/JucePluginHost.cpp
     src/Session.cpp
+    src/MidiControl.cpp
+    src/MidiClock.cpp
     src/MainComponent.cpp
     src/ArrangeView.cpp
     src/MixerView.cpp

@@ -171,6 +171,14 @@ Json trackToJson(const Track& t) {
             notes.push(JsonArray{Json(n.tick), Json(n.lengthTick), Json(n.pitch), Json(n.velocity)});
         }
         cj["notes"] = notes;
+        if (!c.controls.empty()) {
+            // [tick, kind, number, value]; kind 0 = controller (CC), 1 = pitch bend.
+            Json ctl = Json::array();
+            for (const auto& m : c.controls)
+                ctl.push(JsonArray{Json(m.tick), Json(static_cast<int64_t>(m.kind == MidiControl::Kind::PitchBend)),
+                                   Json(static_cast<int64_t>(m.number)), Json(static_cast<int64_t>(m.value))});
+            cj["controls"] = ctl;
+        }
         if (c.steps) {
             Json st = Json::object(), rows = Json::array();
             st["stepTicks"] = c.steps->stepTicks;
@@ -258,6 +266,13 @@ Track trackFromJson(const Json& j) {
                     if (a.size() < 4) continue;
                     c.notes.push_back({a[0].asInt(), a[1].asInt(), static_cast<int>(a[2].asInt()),
                                        static_cast<int>(a[3].asInt())});
+                }
+            if (auto* ctl = cj.find("controls"); ctl && ctl->isArray())
+                for (auto& m : ctl->asArray()) {
+                    auto& a = m.asArray();
+                    if (a.size() < 4) continue;
+                    c.controls.push_back({a[0].asInt(), a[1].asInt() == 1 ? MidiControl::Kind::PitchBend : MidiControl::Kind::Control,
+                                          static_cast<int>(a[2].asInt()), static_cast<int>(a[3].asInt())});
                 }
             if (auto* st = cj.find("steps"); st && st->isObject()) {
                 StepPattern sp;

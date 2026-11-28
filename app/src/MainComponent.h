@@ -98,6 +98,8 @@ private:
     void showAudioSettings();
     void toggleRecording();
     void togglePlay();
+    void handleTransport(TransportCommand c);
+    void addMidiControllerItems(juce::PopupMenu& m);
     void scanPlugins();
     void prepareForMobile();
     void showMoreMenu();

@@ -642,6 +642,114 @@ static int runSmokeTest(const juce::File& dir) {
         session.seekToTick(0);
     }
 
+    {   // MIDI controllers (e.g. Akai MPK25): bend/mod play live, MIDI Learn, MMC transport, clock out.
+        auto& mc = session.midiControls();
+        const auto settings = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("ynot-midi-test.json");
+        settings.deleteFile();
+        mc.useSettingsFileForTesting(settings);
+        std::string keysId;
+        for (auto& t : session.project().tracks)
+            if (t.name == "Keys") keysId = t.id;
+        session.edit([&](ynot::Project& p) {
+            for (auto& t : p.tracks) {
+                t.armed = t.id == keysId;
+                t.mute = t.id != keysId;
+            }
+        });
+        const int block = 256;
+        std::vector<float> silence(block), outL(block), outR(block), heard;
+        const float* ins[2] = {silence.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        auto render = [&](int blocks) {
+            heard.clear();
+            for (int b = 0; b < blocks; ++b) {
+                session.processForTesting(ins, 2, outs, 2, block);
+                heard.insert(heard.end(), outL.begin(), outL.end());
+                juce::Thread::sleep(1);
+            }
+        };
+        auto pitch = [&] {
+            const int n = static_cast<int>(heard.size()) / 2;
+            return ynot::detectPitchHz(heard.data() + n, n, 48000);
+        };
+        session.injectMidiForTesting(juce::MidiMessage::noteOn(1, 57, static_cast<juce::uint8>(100)));
+        render(60);
+        const double plain = pitch();
+        session.injectMidiForTesting(juce::MidiMessage::pitchWheel(1, 16383));
+        render(60);
+        const double bent = pitch();
+        session.injectMidiForTesting(juce::MidiMessage::pitchWheel(1, 8192));
+        session.injectMidiForTesting(juce::MidiMessage::controllerEvent(1, 64, 127));  // sustain down
+        session.injectMidiForTesting(juce::MidiMessage::noteOff(1, 57));
+        render(40);
+        float sustained = 0;
+        for (float v : heard) sustained = std::max(sustained, std::abs(v));
+        session.injectMidiForTesting(juce::MidiMessage::controllerEvent(1, 64, 0));  // pedal up
+        render(200);
+        float released = 0;
+        for (size_t i = heard.size() / 2; i < heard.size(); ++i) released = std::max(released, std::abs(heard[i]));
+        const double semis = 12.0 * std::log2(bent / std::max(1.0, plain));
+        expect(plain > 0 && std::abs(semis - 2.0) < 0.15, "pitch bend from a MIDI controller bends the synth 2 semitones");
+        expect(sustained > 0.02f && released < 1e-3f, "the sustain pedal holds notes and releases them");
+
+        // MIDI Learn: right-click > MIDI Learn on track 1's fader, then turn a knob.
+        mc.startLearning(MidiTarget::TrackVolume, 0);
+        session.injectMidiForTesting(juce::MidiMessage::controllerEvent(1, 22, 100));
+        mc.flushForTesting();
+        const auto learned = mc.mappingFor(MidiTarget::TrackVolume, 0);
+        session.injectMidiForTesting(juce::MidiMessage::controllerEvent(1, 22, 50));
+        mc.flushForTesting();
+        const double gain = session.project().tracks[0].gainDb;
+        mc.startLearning(MidiTarget::TrackPan, 0);
+        session.injectMidiForTesting(juce::MidiMessage::controllerEvent(1, 23, 0));
+        mc.flushForTesting();
+        const double pan = session.project().tracks[0].pan;
+        expect(learned && learned->cc == 22 && !mc.isLearning() && std::abs(gain - 20 * std::log10(0.25)) < 0.01 &&
+                   std::abs(pan + 1.0) < 1e-9,
+               "MIDI Learn assigns a knob to a track's volume and pan");
+        session.undo();  // knob moves are undoable
+        session.undo();
+        mc.useSettingsFileForTesting(settings);  // saved and reloaded
+        expect(mc.mappings().size() == 2, "MIDI Learn assignments are saved on this computer");
+
+        // Transport buttons: MMC Play / Stop (the MPK25 default).
+        std::vector<TransportCommand> got;
+        session.onTransportCommand = [&](TransportCommand c) { got.push_back(c); };
+        const juce::uint8 play[] = {0xF0, 0x7F, 0x7F, 0x06, 0x02, 0xF7}, stop[] = {0xF0, 0x7F, 0x7F, 0x06, 0x01, 0xF7};
+        session.injectMidiForTesting(juce::MidiMessage(play, 6));
+        session.injectMidiForTesting(juce::MidiMessage(stop, 6));
+        mc.flushForTesting();
+        session.onTransportCommand = nullptr;
+        expect(got.size() == 2 && got[0] == TransportCommand::Play && got[1] == TransportCommand::Stop,
+               "MMC transport buttons (Play/Stop) reach the transport");
+
+        // MIDI clock out: 24 pulses per beat while playing, with Start and Stop.
+        auto& clock = session.midiClockForTesting();
+        clock.holdForTesting(true);
+        session.setMidiClockOut(true);
+        int pulses = 0, starts = 0, stops = 0;
+        auto sink = [&](const juce::MidiMessage& m) {
+            pulses += m.isMidiClock();
+            starts += m.isMidiStart() || m.isMidiContinue();
+            stops += m.isMidiStop();
+        };
+        clock.drainForTesting([](const juce::MidiMessage&) {});
+        session.seekToTick(0);
+        session.play();
+        render(48000 * 2 / block);  // 2 s at 120 BPM = 4 beats
+        session.stop();
+        render(2);
+        clock.drainForTesting(sink);
+        session.setMidiClockOut(false);
+        clock.holdForTesting(false);
+        expect(starts == 1 && stops == 1 && std::abs(pulses - 96) <= 1, "MIDI clock out sends 24 pulses per beat with Start/Stop");
+        mc.clear();
+        settings.deleteFile();
+        session.edit([&](ynot::Project& p) {
+            for (auto& t : p.tracks) t.armed = t.mute = false;
+        });
+    }
+
     {   // Save As copies the song (with its recordings) and continues in the copy; edits mark it unsaved.
         session.edit([&](ynot::Project& p) { p.tracks[0].name = "Lead vocal"; });
         const bool markedEdited = session.isModified();

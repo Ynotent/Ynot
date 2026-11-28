@@ -24,12 +24,24 @@
 
 namespace ynot {
 
+// A MIDI event within an audio block: a note, a controller (CC: mod wheel, sustain pedal,
+// knobs...) or pitch bend.
 struct MidiEvent {
-    int frameOffset;  // within the current block
-    bool noteOn;
-    int pitch;
-    int velocity;
+    enum class Kind : uint8_t { Note, Control, PitchBend };
+    int frameOffset = 0;  // within the current block
+    bool noteOn = false;  // notes: on/off
+    int pitch = 0;        // notes: note number; controls: CC number
+    int velocity = 0;     // notes: velocity; controls: 0..127; pitch bend: 0..16383 (8192 = centre)
+    Kind kind = Kind::Note;
+
+    MidiEvent() = default;
+    MidiEvent(int offset, bool on, int note, int vel, Kind k = Kind::Note)
+        : frameOffset(offset), noteOn(on), pitch(note), velocity(vel), kind(k) {}
+    static MidiEvent control(int offset, int cc, int value) { return {offset, false, cc, value, Kind::Control}; }
+    static MidiEvent bend(int offset, int value) { return {offset, false, 0, value, Kind::PitchBend}; }
+    bool isNote() const { return kind == Kind::Note; }
 };
+inline constexpr int kCcModWheel = 1, kCcSustain = 64, kPitchBendCentre = 8192;
 
 class PluginProcessor {
 public:
@@ -126,6 +138,9 @@ public:
     // call from another thread while audio runs. Offline renders don't loop.
     void setLoop(int64_t startTick, int64_t endTick, bool enabled);
     int64_t loopStartFrame() const { return loopStart_.load(); }
+    // Tempo at a frame (realtime-safe; for MIDI clock and the like).
+    double bpmAtFrame(int64_t frame) const { return tempo_.bpmAt(tickAtFrame(frame)); }
+    double tickAtFrame(int64_t frame) const { return tempo_.secondsToTick(static_cast<double>(frame) / opts_.sampleRate); }
     int64_t loopEndFrame() const { return loopEnd_.load(); }
     int maxBlock() const { return opts_.maxBlock; }
     // Live-only click (never part of bounces or freezes). Realtime-safe toggle.

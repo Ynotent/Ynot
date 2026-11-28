@@ -48,7 +48,7 @@ TEST("quantize: strength moves notes only part of the way") {
 }
 
 TEST("quantize: clips quantize to the song grid, keep lengths, skip hidden notes") {
-    MidiClip c{"c", 100, 4 * kBeat, {}, std::nullopt};
+    MidiClip c{"c", 100, 4 * kBeat, {}, std::nullopt, {}};
     c.notes = {{150, 300, 60, 100},   // abs 250 -> 240 -> clip tick 140
                {-50, 100, 62, 100},   // hidden by a start trim: untouched
                {965, 200, 64, 90}};   // abs 1065 -> 960 -> clip tick 860
@@ -60,7 +60,7 @@ TEST("quantize: clips quantize to the song grid, keep lengths, skip hidden notes
 
     QuantizeSettings ends = grid(kGrid1_8);
     ends.quantizeLengths = true;
-    MidiClip d{"d", 0, 4 * kBeat, {{10, 470, 60, 100}}, std::nullopt};
+    MidiClip d{"d", 0, 4 * kBeat, {{10, 470, 60, 100}}, std::nullopt, {}};
     quantizeClip(d, ends);
     CHECK_EQ(d.notes[0].tick, int64_t(0));
     CHECK_EQ(d.notes[0].lengthTick, int64_t(480));

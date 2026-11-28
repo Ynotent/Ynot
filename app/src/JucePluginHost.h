@@ -40,6 +40,8 @@ public:
     void process(float* left, float* right, int frames, const ynot::MidiEvent* events, int numEvents) override;
     void setParameter(const std::string& id, double normalizedValue) override;
     void reset() override;
+    // Plugins that look ahead (limiters, linear-phase EQs...) report it; the engine compensates.
+    int latencySamples() const override { return proc_->getLatencySamples(); }
     juce::AudioProcessor& processor() { return *proc_; }
 
 private:

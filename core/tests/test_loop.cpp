@@ -18,7 +18,7 @@ Project synthProject(std::vector<MidiNote> notes) {
     t.id = "k";
     t.kind = TrackKind::Instrument;
     t.instrument = makeBuiltin(kBuiltinSynth, "Synth");
-    t.midiClips = {{"m", 0, 4 * kBar, std::move(notes), std::nullopt}};
+    t.midiClips = {{"m", 0, 4 * kBar, std::move(notes), std::nullopt, {}}};
     p.tracks = {t};
     return p;
 }

@@ -17,6 +17,13 @@ Session::Session(JucePluginHost& host) : host_(host) {
     scratchL_.assign(kScratchFrames, 0.f);
     scratchR_.assign(kScratchFrames, 0.f);
     keyboardState_.addListener(&collector_);
+    midiControls_ = std::make_unique<MidiControlMap>(
+        juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+            .getChildFile("Ynot").getChildFile("midi-controls.json"));
+    midiControls_->onControl = [this](const MidiMapping& m, int v) { applyMidiControl(m, v); };
+    midiControls_->onTransport = [this](TransportCommand c) { if (onTransportCommand) onTransportCommand(c); };
+    midiControls_->onLearned = [this] { if (onChange) onChange(); };
+    if (midiControls_->clockOut()) midiClock_.setEnabled(true);
     device_.onDeviceChanged = [this] { deviceChanged(); };
     if (auto json = juce::JSON::parse(ioSettingsFile()); json.isObject())
         mainOutputPair_ = std::max(0, static_cast<int>(json.getProperty("mainOutputPair", 0)));  // on-screen keyboard -> same path as hardware MIDI
@@ -681,7 +688,31 @@ double Session::recordingSeconds() const {
 }
 
 void Session::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& m) {
+    // Learned knobs and transport buttons control Ynot; everything else plays the instruments.
+    if (midiControls_->handle(m)) return;
+    if (m.isSysEx() || m.isMidiClock() || m.isActiveSense()) return;
     collector_.addMessageToQueue(m);  // MIDI thread -> lock-free hand-off to the audio thread
+}
+
+void Session::applyMidiControl(const MidiMapping& map, int value) {
+    if (!loaded_) return;
+    // A burst of knob movement is one undo step.
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    if (now - lastMidiControlMs_ > 1000) beginMixChange();
+    lastMidiControlMs_ = now;
+    if (map.target == MidiTarget::MasterVolume) {
+        setMasterGain(ccToVolumeDb(value));
+    } else if (map.trackIndex >= 0 && map.trackIndex < static_cast<int>(project_.tracks.size())) {
+        const auto id = project_.tracks[static_cast<size_t>(map.trackIndex)].id;
+        if (map.target == MidiTarget::TrackVolume) setTrackGain(id, ccToVolumeDb(value));
+        else if (map.target == MidiTarget::TrackPan) setTrackPan(id, ccToPan(value));
+    }
+    if (onChange) onChange();
+}
+
+void Session::setMidiClockOut(bool on) {
+    midiClock_.setEnabled(on);
+    midiControls_->setClockOut(on);
 }
 
 int Session::numMidiInputs() const {
@@ -875,6 +906,11 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
         if (numLive >= kMaxLiveMidi) break;
         if (m.isNoteOn()) liveMidi_[static_cast<size_t>(numLive++)] = {meta.samplePosition, true, m.getNoteNumber(), m.getVelocity()};
         else if (m.isNoteOff()) liveMidi_[static_cast<size_t>(numLive++)] = {meta.samplePosition, false, m.getNoteNumber(), 0};
+        else if (m.isController())
+            liveMidi_[static_cast<size_t>(numLive++)] =
+                ynot::MidiEvent::control(meta.samplePosition, m.getControllerNumber(), m.getControllerValue());
+        else if (m.isPitchWheel())
+            liveMidi_[static_cast<size_t>(numLive++)] = ynot::MidiEvent::bend(meta.samplePosition, m.getPitchWheelValue());
     }
     // Capture before rendering: some drivers share input and output buffers.
     // Recording uses its own continuous clock: the playhead jumps back at the loop end, the
@@ -900,6 +936,11 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
     float* l = numOuts > 0 ? outs[base] : scratchL_.data();
     float* r = numOuts > 1 ? outs[base + 1] : scratchR_.data();
     const bool running = playing_.load();
+    if (engine) {
+        const int64_t at = engine->position();
+        midiClock_.processBlock(running, engine->bpmAtFrame(at), sampleRate_, frames, engine->tickAtFrame(at),
+                                static_cast<double>(ynot::kTicksPerQuarter));
+    }
     if (engine && (running || monitoring_.load() || liveMidiActive_.load())) {
         // Drivers may deliver blocks larger than requested; render in chunks.
         const float* chunkIns[16] = {};

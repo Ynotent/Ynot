@@ -36,15 +36,23 @@ public:
         int e = 0;
         for (int i = 0; i < frames; ++i) {
             while (e < nev && ev[e].frameOffset <= i) handle(ev[e++]);
+            // Pitch bend and mod-wheel vibrato (about 5.5 Hz, up to a quarter tone) scale every voice.
+            double pitchScale = bend_;
+            if (mod_ > 0) {
+                lfo_ += 5.5 / sr_;
+                if (lfo_ >= 1.0) lfo_ -= 1.0;
+                pitchScale *= 1.0 + 0.0145 * mod_ * std::sin(2 * kPi * lfo_);
+            }
             double s = 0;
             for (auto& v : voices_) {
                 if (!v.active) continue;
-                double a = v.on ? std::min(1.0, v.env + 1.0 / std::max(1.0, attack_ * sr_))
-                                : v.env - 1.0 / std::max(1.0, release_ * sr_);
+                const bool sounding = v.on || v.sustained;
+                double a = sounding ? std::min(1.0, v.env + 1.0 / std::max(1.0, attack_ * sr_))
+                                    : v.env - 1.0 / std::max(1.0, release_ * sr_);
                 v.env = a;
                 if (v.env <= 0) { v.active = false; continue; }
                 double osc = wave_ < 0.5 ? std::sin(2 * kPi * v.phase) : 2.0 * v.phase - 1.0;
-                v.phase += v.inc;
+                v.phase += v.inc * pitchScale;
                 if (v.phase >= 1.0) v.phase -= 1.0;
                 s += osc * v.env * v.vel;
             }
@@ -60,28 +68,51 @@ public:
     }
     void reset() override {
         for (auto& v : voices_) v = Voice{};
+        sustain_ = false;
+        bend_ = 1.0;
+        mod_ = 0;
     }
 
 private:
     struct Voice {
-        bool active = false, on = false;
+        bool active = false, on = false, sustained = false;
         int pitch = 0;
         double phase = 0, inc = 0, env = 0, vel = 0;
     };
     void handle(const MidiEvent& e) {
+        if (e.kind == MidiEvent::Kind::PitchBend) {  // +-2 semitones
+            bend_ = std::pow(2.0, 2.0 * (std::clamp(e.velocity, 0, 16383) - kPitchBendCentre) / 8192.0 / 12.0);
+            return;
+        }
+        if (e.kind == MidiEvent::Kind::Control) {
+            if (e.pitch == kCcModWheel) mod_ = std::clamp(e.velocity, 0, 127) / 127.0;
+            if (e.pitch == kCcSustain) {
+                sustain_ = e.velocity >= 64;
+                if (!sustain_)  // pedal up: release the notes it was holding
+                    for (auto& v : voices_) v.sustained = false;
+            }
+            if (e.pitch == 123 || e.pitch == 120)  // all notes off / all sound off
+                for (auto& v : voices_) v.on = v.sustained = false;
+            return;
+        }
         if (e.noteOn && e.velocity > 0) {
             Voice* slot = nullptr;
             for (auto& v : voices_)
                 if (!v.active) { slot = &v; break; }
             if (!slot) slot = &voices_[0];  // simple voice stealing
-            *slot = Voice{true, true, e.pitch, 0.0,
+            *slot = Voice{true, true, false, e.pitch, 0.0,
                           440.0 * std::pow(2.0, (e.pitch - 69) / 12.0) / sr_, 0.0, e.velocity / 127.0};
         } else {
             for (auto& v : voices_)
-                if (v.active && v.on && v.pitch == e.pitch) v.on = false;
+                if (v.active && v.on && v.pitch == e.pitch) {
+                    v.on = false;
+                    v.sustained = sustain_;  // the pedal keeps it ringing
+                }
         }
     }
     double sr_, wave_, attack_, release_, level_;
+    bool sustain_ = false;
+    double bend_ = 1.0, mod_ = 0, lfo_ = 0;
     std::array<Voice, 16> voices_{};
 };
 
@@ -295,11 +326,33 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
                 ts->events.push_back({tickToFrame(on), {0, true, n.pitch, n.velocity}});
                 ts->events.push_back({tickToFrame(off), {0, false, n.pitch, 0}});
             }
+            // Controller data (pitch bend, mod wheel, sustain...). At the clip's end, anything
+            // left bent or held is put back, so the next clip doesn't inherit it.
+            bool bent = false, held = false, modded = false;
+            for (const auto& m : c.controls) {
+                if (m.tick < 0 || m.tick >= c.lengthTick) continue;
+                const int64_t at = tickToFrame(c.startTick + m.tick);
+                if (m.kind == MidiControl::Kind::PitchBend) {
+                    ts->events.push_back({at, MidiEvent::bend(0, m.value)});
+                    bent = m.value != kPitchBendCentre;
+                } else {
+                    ts->events.push_back({at, MidiEvent::control(0, m.number, m.value)});
+                    if (m.number == kCcSustain) held = m.value >= 64;
+                    if (m.number == kCcModWheel) modded = m.value > 0;
+                }
+            }
+            const int64_t endFrame = tickToFrame(clipEnd);
+            if (bent) ts->events.push_back({endFrame, MidiEvent::bend(0, kPitchBendCentre)});
+            if (held) ts->events.push_back({endFrame, MidiEvent::control(0, kCcSustain, 0)});
+            if (modded) ts->events.push_back({endFrame, MidiEvent::control(0, kCcModWheel, 0)});
         }
         std::stable_sort(ts->events.begin(), ts->events.end(),
                          [](const TrackState::TimedEvent& a, const TrackState::TimedEvent& b) {
                              if (a.frame != b.frame) return a.frame < b.frame;
-                             return !a.ev.noteOn && b.ev.noteOn;  // note-offs first
+                             // Same moment: controls first (a bend or pedal applies to the note that
+                             // starts with it), then note-offs, then note-ons.
+                             auto rank = [](const MidiEvent& e) { return !e.isNote() ? 0 : e.noteOn ? 2 : 1; };
+                             return rank(a.ev) < rank(b.ev);
                          });
         ts->blockEvents.reserve(ts->events.size() + kMaxLiveMidiPerBlock);
 

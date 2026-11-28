@@ -58,6 +58,15 @@ struct MidiNote {
     int velocity = 100;
 };
 
+// Controller data in a MIDI clip: pitch bend, mod wheel, sustain pedal, other CCs.
+struct MidiControl {
+    enum class Kind : uint8_t { Control, PitchBend };
+    int64_t tick = 0;  // relative to the clip start
+    Kind kind = Kind::Control;
+    int number = 0;    // CC number (Control)
+    int value = 0;     // 0..127 (Control) or 0..16383, 8192 = centre (PitchBend)
+};
+
 // A drum/step pattern's grid. The notes in the clip are the truth (they play anywhere);
 // this tells the step editor how to show them.
 struct StepPattern {
@@ -72,6 +81,7 @@ struct MidiClip {
     int64_t lengthTick = 0;
     std::vector<MidiNote> notes;
     std::optional<StepPattern> steps;  // set for step-sequencer patterns
+    std::vector<MidiControl> controls; // sorted by tick
 };
 
 struct AutomationPoint {

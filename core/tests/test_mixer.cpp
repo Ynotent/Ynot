@@ -13,7 +13,7 @@ Project oneTone() {
     t.id = "k";
     t.kind = TrackKind::Instrument;
     t.instrument = makeBuiltin(kBuiltinSynth, "Synth");
-    t.midiClips = {{"m", 0, 8 * kTicksPerQuarter, {{0, 8 * kTicksPerQuarter, 69, 100}}, std::nullopt}};
+    t.midiClips = {{"m", 0, 8 * kTicksPerQuarter, {{0, 8 * kTicksPerQuarter, 69, 100}}, std::nullopt, {}}};
     p.tracks = {t};
     return p;
 }

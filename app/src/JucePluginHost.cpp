@@ -65,8 +65,19 @@ void JuceProcessorAdapter::process(float* left, float* right, int frames, const 
     midi_.clear();
     for (int i = 0; i < numEvents; ++i) {
         const auto& e = events[i];
-        auto msg = e.noteOn ? juce::MidiMessage::noteOn(1, e.pitch, static_cast<juce::uint8>(e.velocity))
-                            : juce::MidiMessage::noteOff(1, e.pitch);
+        juce::MidiMessage msg;
+        switch (e.kind) {
+            case ynot::MidiEvent::Kind::Control:
+                msg = juce::MidiMessage::controllerEvent(1, std::clamp(e.pitch, 0, 127), std::clamp(e.velocity, 0, 127));
+                break;
+            case ynot::MidiEvent::Kind::PitchBend:
+                msg = juce::MidiMessage::pitchWheel(1, std::clamp(e.velocity, 0, 16383));
+                break;
+            case ynot::MidiEvent::Kind::Note:
+                msg = e.noteOn ? juce::MidiMessage::noteOn(1, e.pitch, static_cast<juce::uint8>(e.velocity))
+                               : juce::MidiMessage::noteOff(1, e.pitch);
+                break;
+        }
         midi_.addEvent(msg, std::clamp(e.frameOffset, 0, frames - 1));
     }
     proc_->processBlock(buffer_, midi_);

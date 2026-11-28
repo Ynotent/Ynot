@@ -26,7 +26,7 @@ namespace ynotapp {
 namespace sandbox {
 
 constexpr uint32_t kMagic = 0x594E5342;  // "YNSB"
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 3;  // 3: MIDI events carry controllers and pitch bend
 constexpr int kMaxBlock = 2048;
 constexpr int kMaxMidi = 512;
 constexpr int kMaxParams = 64;

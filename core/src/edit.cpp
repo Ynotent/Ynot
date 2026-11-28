@@ -97,6 +97,7 @@ bool trimClipStart(Project& p, const std::string& trackId, const std::string& cl
         newStartTick = std::clamp<int64_t>(newStartTick, 0, end - kMinClipTicks);
         const int64_t delta = newStartTick - c->startTick;
         for (auto& n : c->notes) n.tick -= delta;  // notes before the clip start are hidden, not deleted
+        for (auto& m : c->controls) m.tick -= delta;
         c->startTick = newStartTick;
         c->lengthTick = end - newStartTick;
         return true;
@@ -146,6 +147,7 @@ std::optional<std::string> splitClip(Project& p, const std::string& trackId, con
         right.startTick = atTick;
         right.lengthTick = e - atTick;
         for (auto& n : right.notes) n.tick -= atTick - s;
+        for (auto& m : right.controls) m.tick -= atTick - s;
         c->lengthTick = atTick - s;
         std::string id = right.id;
         t->midiClips.push_back(right);
@@ -180,6 +182,14 @@ int eraseNotesInRange(Track& track, int64_t fromTick, int64_t toTick) {
                                    }),
                     notes.end());
         removed += static_cast<int>(before - notes.size());
+        // Punch replaces the controller data in the range too (bends, pedal moves).
+        c.controls.erase(std::remove_if(c.controls.begin(), c.controls.end(),
+                                        [&](const MidiControl& m) {
+                                            const int64_t abs = c.startTick + m.tick;
+                                            return m.tick >= 0 && m.tick < c.lengthTick && abs >= fromTick &&
+                                                   abs < toTick;
+                                        }),
+                         c.controls.end());
     }
     return removed;
 }

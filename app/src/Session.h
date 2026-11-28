@@ -17,6 +17,8 @@
 #include "AudioImporter.h"
 #include "JuceAudioDevice.h"
 #include "JucePluginHost.h"
+#include "MidiClock.h"
+#include "MidiControl.h"
 #include "ynot/ynot.hpp"
 
 namespace ynotapp {
@@ -216,6 +218,19 @@ public:
     std::vector<ynot::EngineIssue> engineIssues() const { return issues_; }
     std::vector<std::string> tracksToPrepareForMobile() const;
 
+    // Hardware controllers: MIDI Learn mappings, transport buttons (MMC) and MIDI clock out.
+    MidiControlMap& midiControls() { return *midiControls_; }
+    void setMidiClockOut(bool on);
+    bool midiClockOut() const { return midiClock_.isEnabled(); }
+    // The MIDI-thread entry point, for tests without hardware.
+    void injectMidiForTesting(juce::MidiMessage m) {
+        m.setTimeStamp(juce::Time::getMillisecondCounterHiRes() * 0.001);  // as a device stamps it
+        handleIncomingMidiMessage(nullptr, m);
+    }
+    MidiClockSender& midiClockForTesting() { return midiClock_; }
+    // Transport buttons on a controller (message thread). Set by the main window.
+    std::function<void(TransportCommand)> onTransportCommand;
+
     std::function<void()> onChange;  // UI refresh hook
 
 private:
@@ -259,6 +274,10 @@ private:
 
     static constexpr int kMaxLiveMidi = 512;
     juce::MidiMessageCollector collector_;
+    std::unique_ptr<MidiControlMap> midiControls_;
+    MidiClockSender midiClock_;
+    void applyMidiControl(const MidiMapping& map, int value);
+    double lastMidiControlMs_ = 0;
     juce::MidiKeyboardState keyboardState_;
     juce::MidiBuffer midiBuffer_;
     std::vector<ynot::MidiEvent> liveMidi_, chunkMidi_;
