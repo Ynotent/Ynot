@@ -13,6 +13,7 @@
 #include <memory>
 #include <thread>
 
+#include "AudioExporter.h"
 #include "AudioImporter.h"
 #include "JuceAudioDevice.h"
 #include "JucePluginHost.h"
@@ -101,6 +102,9 @@ public:
     // Mode used for clips that haven't been stretched yet (user preference).
     void setDefaultStretchMode(ynot::StretchMode m) { defaultStretchMode_ = m; }
     ynot::StretchMode defaultStretchMode() const { return defaultStretchMode_; }
+
+    // Export: builds the offline render (message thread); run it with runExport() on any thread.
+    ExportJob prepareExport(const ExportSettings& s);
 
     // Quantize (device/user preference, not stored in the project).
     void setRecordQuantize(const std::string& presetId);  // "" = off

@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "AudioImporter.h"
+#include "ExportPanel.h"
 #include "QuantizeMenus.h"
 
 namespace ynotapp {
@@ -45,8 +46,10 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_,
-                    &mixerButton_})
+                    &mixerButton_, &exportButton_})
         addAndMakeVisible(*b);
+    exportButton_.setTooltip("Export the song as WAV, FLAC, M4A... (Cmd/Ctrl+E)");
+    exportButton_.onClick = [this] { ExportPanel::show(session_, theme_); };
     addChildComponent(mixer_);
     mixerButton_.setTooltip("Show the mixer (X)");
     mixerButton_.onClick = [this] { toggleMixer(); };
@@ -96,7 +99,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_,
-                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_, &mixerButton_})
+                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_, &mixerButton_, &exportButton_})
         b->setMouseClickGrabsKeyboardFocus(false);
     // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
     // (play/stop) and Return (to start) still work while the keyboard has focus.
@@ -184,7 +187,7 @@ void MainComponent::resized() {
             toolbar.push_back(b);
     }
     for (auto* b : {&keysButton_, &undoButton_, &redoButton_}) toolbar.push_back(b);
-    for (auto* b : {&newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_}) {
+    for (auto* b : {&newButton_, &openButton_, &saveButton_, &exportButton_, &audioButton_, &scanButton_}) {
         const bool show = !compact() && (b != &scanButton_ || canScanPlugins());
         b->setVisible(show);
         if (show) toolbar.push_back(b);
@@ -274,6 +277,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
         key == juce::KeyPress('y', cmd, 0))
         return session_.redo(), true;
     if (key == juce::KeyPress('s', cmd, 0)) return session_.save(), true;
+    if (key == juce::KeyPress('e', cmd, 0)) return ExportPanel::show(session_, theme_), true;
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'x' || key.getTextCharacter() == 'X'))
         return toggleMixer(), true;
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'l' || key.getTextCharacter() == 'L')) {
@@ -424,6 +428,7 @@ void MainComponent::showMoreMenu() {
     m.addItem("New Demo", [this] { newDemo(); });
     m.addItem("Open...", [this] { openProject(); });
     m.addItem("Save", [this] { session_.save(); });
+    m.addItem("Export song...", [this] { ExportPanel::show(session_, theme_); });
     m.addSeparator();
     m.addItem("Count-in (1 bar)", true, session_.countInBars() > 0, [this] {
         session_.setCountInBars(session_.countInBars() > 0 ? 0 : 1);

@@ -13,8 +13,12 @@
 #include <mfreadwrite.h>
 #include <propidl.h>
 
+#include <algorithm>
+#include <climits>
 #include <cstring>
+#include <vector>
 
+#pragma comment(lib, "mf.lib")
 #pragma comment(lib, "mfplat.lib")
 #pragma comment(lib, "mfreadwrite.lib")
 #pragma comment(lib, "mfuuid.lib")
@@ -158,6 +162,109 @@ bool decodeWithMediaFoundation(const std::wstring& path, int64_t maxFrames, ynot
             out.samples.resize(static_cast<size_t>(expected) * channels, 0.f);
     }
     PropVariantClear(&duration);
+    return true;
+}
+
+bool encodeWithMediaFoundation(const std::wstring& path, const ynot::AudioBuffer& audio, bool mp3, int bitrateKbps,
+                               std::string& error) {
+    const char* name = mp3 ? "MP3" : "AAC";
+    if (audio.channels != 2 || audio.frames() <= 0) {
+        error = "Nothing to encode.";
+        return false;
+    }
+    MfSession session;
+    if (!session.mf) {
+        error = "Windows Media Foundation isn't available on this PC. On Windows \"N\" editions, install the "
+                "Media Feature Pack from Windows Settings > Apps > Optional features.";
+        return false;
+    }
+    const auto rate = static_cast<UINT32>(audio.sampleRate);
+    // The encoder lists the settings it supports; take the stereo one at this rate closest to the
+    // requested bit rate.
+    Com<IMFCollection> types;
+    if (FAILED(MFTranscodeGetAudioOutputAvailableTypes(mp3 ? MFAudioFormat_MP3 : MFAudioFormat_AAC, MFT_ENUM_FLAG_ALL,
+                                                       nullptr, types.put()))) {
+        error = std::string("This PC has no ") + name + " encoder.";
+        return false;
+    }
+    DWORD count = 0;
+    types->GetElementCount(&count);
+    Com<IMFMediaType> best;
+    long bestDiff = LONG_MAX;
+    for (DWORD i = 0; i < count; ++i) {
+        Com<IUnknown> unk;
+        if (FAILED(types->GetElement(i, unk.put())) || !unk) continue;
+        Com<IMFMediaType> t;
+        if (FAILED(unk->QueryInterface(IID_PPV_ARGS(t.put())))) continue;
+        UINT32 r = 0, ch = 0, bytesPerSecond = 0;
+        t->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &r);
+        t->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &ch);
+        t->GetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, &bytesPerSecond);
+        if (r != rate || ch != 2) continue;
+        const long diff = std::abs(static_cast<long>(bytesPerSecond) * 8 / 1000 - bitrateKbps);
+        if (diff < bestDiff) {
+            bestDiff = diff;
+            if (best.p) best.p->Release();
+            best.p = t.p;  // take ownership
+            t.p = nullptr;
+        }
+    }
+    if (!best) {
+        error = std::string("Windows' ") + name + " encoder doesn't support stereo at " + std::to_string(rate) + " Hz.";
+        return false;
+    }
+    Com<IMFSinkWriter> writer;
+    DWORD stream = 0;
+    if (FAILED(MFCreateSinkWriterFromURL(path.c_str(), nullptr, nullptr, writer.put())) ||
+        FAILED(writer->AddStream(best.p, &stream))) {
+        error = std::string("Couldn't create the ") + name + " file.";
+        return false;
+    }
+    Com<IMFMediaType> in;
+    if (FAILED(MFCreateMediaType(in.put())) || FAILED(in->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio)) ||
+        FAILED(in->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM)) ||
+        FAILED(in->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, rate)) ||
+        FAILED(in->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2)) || FAILED(in->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16)) ||
+        FAILED(in->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 4)) ||
+        FAILED(in->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, rate * 4)) ||
+        FAILED(writer->SetInputMediaType(stream, in.p, nullptr)) || FAILED(writer->BeginWriting())) {
+        error = std::string("Windows' ") + name + " encoder refused the audio format.";
+        return false;
+    }
+    const int64_t frames = audio.frames();
+    constexpr int64_t kChunk = 4096;
+    for (int64_t done = 0; done < frames;) {
+        const auto n = static_cast<DWORD>(std::min<int64_t>(kChunk, frames - done));
+        Com<IMFMediaBuffer> buffer;
+        Com<IMFSample> sample;
+        BYTE* data = nullptr;
+        if (FAILED(MFCreateMemoryBuffer(n * 4, buffer.put())) || FAILED(buffer->Lock(&data, nullptr, nullptr))) {
+            error = "Out of memory while encoding.";
+            return false;
+        }
+        auto* pcm = reinterpret_cast<int16_t*>(data);
+        for (DWORD i = 0; i < n * 2; ++i) {
+            const float v = std::clamp(audio.samples[static_cast<size_t>(done * 2) + i], -1.f, 1.f);
+            pcm[i] = static_cast<int16_t>(std::lround(v * 32767.f));
+        }
+        buffer->Unlock();
+        buffer->SetCurrentLength(n * 4);
+        if (FAILED(MFCreateSample(sample.put())) || FAILED(sample->AddBuffer(buffer.p))) {
+            error = "Out of memory while encoding.";
+            return false;
+        }
+        sample->SetSampleTime(static_cast<LONGLONG>(static_cast<double>(done) * 1e7 / audio.sampleRate));
+        sample->SetSampleDuration(static_cast<LONGLONG>(static_cast<double>(n) * 1e7 / audio.sampleRate));
+        if (FAILED(writer->WriteSample(stream, sample.p))) {
+            error = std::string("Encoding to ") + name + " failed partway through.";
+            return false;
+        }
+        done += n;
+    }
+    if (FAILED(writer->Finalize())) {
+        error = std::string("Finishing the ") + name + " file failed.";
+        return false;
+    }
     return true;
 }
 

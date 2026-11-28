@@ -464,6 +464,50 @@ static int runSmokeTest(const juce::File& dir) {
         session.seekToTick(0);
     }
 
+    {   // Export: every format this platform offers, read back with the importer.
+        const auto outDir = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("ynot-export-test");
+        outDir.deleteRecursively();
+        const ynot::TempoMap tempo(session.project());
+        const double songSeconds = tempo.tickToSeconds(static_cast<double>(session.project().endTick()));
+        bool allOk = true;
+        for (auto f : availableExportFormats()) {
+            ExportSettings es;
+            es.format = f;
+            es.sampleRate = 48000;
+            es.bitDepth = f == ExportFormat::Wav ? 16 : 24;
+            es.normalize = true;
+            const auto file = outDir.getChildFile("song" + formatExtension(f));
+            auto job = session.prepareExport(es);
+            const auto err = runExport(job, file);
+            const auto back = decodeAudioFile(file);
+            float exportPeak = 0;
+            for (float v : back.audio.samples) exportPeak = std::max(exportPeak, std::abs(v));
+            const double seconds = back.ok ? static_cast<double>(back.audio.frames()) / back.audio.sampleRate : 0;
+            // Song plus a reverb/delay tail (at most 10 s); lossy encoders may pad a little.
+            const bool good = err.isEmpty() && back.ok && std::abs(back.audio.sampleRate - exportRateFor(es)) < 1 &&
+                              seconds >= songSeconds - 0.01 && seconds <= songSeconds + 10.2 && exportPeak > 0.8f &&
+                              exportPeak < 1.0f;
+            std::cout << "  info export " << formatName(f) << ": "
+                      << (good ? juce::String("ok") : "FAILED " + err + " " + back.error) << " (" << seconds
+                      << " s of " << songSeconds << ", peak " << exportPeak << ", " << file.getSize() << " bytes)" << std::endl;
+            allOk &= good;
+        }
+        expect(allOk, "export writes every available format; files read back at the right length and level");
+
+        ExportSettings loopOnly;
+        loopOnly.format = ExportFormat::Wav;
+        loopOnly.loopOnly = true;
+        session.setLoopRange(0, session.project().barTicks());
+        const auto loopFile = outDir.getChildFile("loop.wav");
+        auto job = session.prepareExport(loopOnly);
+        const auto err = runExport(job, loopFile);
+        const auto back = decodeAudioFile(loopFile);
+        const int64_t barFrames = tempo.tickToFrame(session.project().barTicks(), 48000);
+        expect(err.isEmpty() && back.ok && back.audio.frames() == barFrames,
+               "loop export is exactly the loop's length (seamless)");
+        outDir.deleteRecursively();
+    }
+
     {   // Tempo: a change at bar 3 moves the playhead's time but not its bar; undo restores it.
         const int64_t bar3 = 2 * session.project().barTicks();
         session.seekToTick(bar3 + ynot::kTicksPerQuarter);

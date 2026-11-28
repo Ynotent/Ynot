@@ -15,7 +15,9 @@ set(YNOT_APP_SOURCES
     src/ArrangeView.cpp
     src/MixerView.cpp
     src/PluginSandbox.cpp
-    src/AudioImporter.cpp)
+    src/AudioImporter.cpp
+    src/AudioExporter.cpp
+    src/ExportPanel.cpp)
 
 juce_add_gui_app(YnotApp
     PRODUCT_NAME "Ynot"
@@ -33,7 +35,10 @@ target_sources(YnotApp PRIVATE src/Main.cpp ${YNOT_APP_SOURCES})
 if(WIN32)
     # Media Foundation: WMV/WMA/MP4/M4A/AAC import (audio from video containers too).
     target_sources(YnotApp PRIVATE src/MediaFoundationDecoder.cpp)
-    target_link_libraries(YnotApp PRIVATE mfplat mfreadwrite mfuuid ole32)
+    target_link_libraries(YnotApp PRIVATE mf mfplat mfreadwrite mfuuid ole32)
+endif()
+if(APPLE)
+    target_sources(YnotApp PRIVATE src/AppleAacEncoder.cpp)  # M4A export
 endif()
 
 set(YNOT_JUCE_DEFS
@@ -73,7 +78,7 @@ if(YNOT_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_sources(YnotAppTests PRIVATE tests/AppTests.cpp src/JucePluginHost.cpp src/JuceAudioDevice.cpp src/PluginSandbox.cpp src/AudioImporter.cpp)
     if(WIN32)
         target_sources(YnotAppTests PRIVATE src/MediaFoundationDecoder.cpp)
-        target_link_libraries(YnotAppTests PRIVATE mfplat mfreadwrite mfuuid ole32)
+        target_link_libraries(YnotAppTests PRIVATE mf mfplat mfreadwrite mfuuid ole32)
     endif()
     target_compile_definitions(YnotAppTests PRIVATE ${YNOT_JUCE_DEFS}
         YNOT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")

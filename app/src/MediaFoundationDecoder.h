@@ -15,4 +15,8 @@ namespace ynotapp {
 bool decodeWithMediaFoundation(const std::wstring& path, int64_t maxFrames, ynot::AudioBuffer& out,
                                std::string& error);
 
+// Writes stereo float audio as M4A (AAC) or MP3 with Windows' own encoders (Windows 8+).
+bool encodeWithMediaFoundation(const std::wstring& path, const ynot::AudioBuffer& stereo, bool mp3, int bitrateKbps,
+                               std::string& error);
+
 }  // namespace ynotapp

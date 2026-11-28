@@ -519,6 +519,11 @@ void Session::importAudioFile(const juce::File& file, const std::string& trackId
     });
 }
 
+ExportJob Session::prepareExport(const ExportSettings& s) {
+    host_.captureState(project_);  // plugin settings changed in their windows
+    return ynotapp::prepareExport(project_, *media_, host_, s);
+}
+
 void Session::stretchClip(const std::string& trackId, const std::string& clipId, double ratio,
                           ynot::StretchMode mode, std::function<void(const juce::String&)> done) {
     if (!loaded_ || !media_) {
