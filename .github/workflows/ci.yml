@@ -83,12 +83,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev xvfb
       - run: |
           cmake -S . -B build -DYNOT_BUILD_APP=ON -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j
+          cmake --build build -j 4
           ctest --test-dir build --output-on-failure
           xvfb-run -a build/app/YnotApp_artefacts/Release/Ynot --smoke-test "$RUNNER_TEMP/smoke.ynot"
 
   app-macos:
-    timeout-minutes: 75
+    timeout-minutes: 90
     name: App (macOS, CoreAudio + AU/VST3 hosting)
     runs-on: macos-15  # macos-14 was retired by GitHub on 2026-11-02
     steps:
@@ -97,7 +97,7 @@ jobs:
           # Apple Silicon only here: a universal app build takes ~37 min per push. The core job
           # still builds and tests universal (arm64 + x86_64); Intel app builds are a release step.
           cmake -S . -B build -DYNOT_BUILD_APP=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
-          cmake --build build -j
+          cmake --build build -j 3  # unbounded -j overloads the 3-core runner (timed out at 75 min)
           ctest --test-dir build --output-on-failure
           build/app/YnotApp_artefacts/Release/Ynot.app/Contents/MacOS/Ynot --smoke-test "$RUNNER_TEMP/smoke.ynot"
           # The download must open on older Macs, not only on the runner's macOS 15.
