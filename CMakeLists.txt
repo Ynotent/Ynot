@@ -40,6 +40,7 @@ add_library(ynot_core STATIC
     core/src/midi_recorder.cpp
     core/src/quantize.cpp
     core/src/stretch.cpp
+    core/src/drums.cpp
 )
 target_include_directories(ynot_core PUBLIC core/include)
 if(MSVC)
@@ -90,6 +91,7 @@ if(YNOT_BUILD_TESTS)
         core/tests/test_tempo.cpp
         core/tests/test_loop.cpp
         core/tests/test_mixer.cpp
+        core/tests/test_drums.cpp
     )
     target_link_libraries(ynot_core_tests PRIVATE ynot_core)
     add_test(NAME ynot_core_tests COMMAND ynot_core_tests)

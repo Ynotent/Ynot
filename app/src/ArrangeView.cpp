@@ -5,6 +5,7 @@
 #include "AudioImporter.h"
 #include "QuantizeMenus.h"
 #include "ynot/edit.hpp"
+#include "ynot/drums.hpp"
 #include "ynot/stretch.hpp"
 
 namespace ynotapp {
@@ -461,6 +462,14 @@ public:
 
     void mouseDoubleClick(const juce::MouseEvent& e) override {
         if (auto hit = clipAt(e.position)) {
+            // Drum patterns open in the step sequencer; other clips split at the click.
+            if (!hit->audio && owner_.onOpenPattern)
+                if (const auto* t = owner_.session_.project().findTrack(hit->trackId))
+                    for (const auto& c : t->midiClips)
+                        if (c.id == hit->clipId && c.steps) {
+                            owner_.onOpenPattern(hit->trackId, hit->clipId);
+                            return;
+                        }
             const int64_t at = ynot::snapTick(owner_.xToTick(e.x), owner_.gridTicks());
             owner_.session_.edit([&](ynot::Project& p) { ynot::splitClip(p, hit->trackId, hit->clipId, at); });
         }
@@ -726,10 +735,14 @@ private:
         });
         m.addItem("Split at playhead", [this] { owner_.splitSelectedAtPlayhead(); });
         m.addSeparator();
-        if (!c.audio)
+        if (!c.audio) {
+            m.addItem("Edit steps (step sequencer)", owner_.onOpenPattern != nullptr, false, [this, c] {
+                if (owner_.onOpenPattern) owner_.onOpenPattern(c.trackId, c.clipId);
+            });
             m.addSubMenu("Quantize", quantizePresetMenu({}, [this, c](const std::string& id) {
                 owner_.session_.quantizeClip(c.trackId, c.clipId, id);
             }, false));
+        }
         if (const auto* a = c.audio ? audioClip(c.trackId, c.clipId) : nullptr) {
             if (a->takeOffsets.size() > 1) {
                 juce::PopupMenu takes;
@@ -1026,6 +1039,9 @@ void ArrangeView::showTrackMenu(const std::string& trackId, juce::Component* tar
         juce::PopupMenu choose;
         choose.addItem("Ynot Synth (built-in)", [&session, tid = track.id] {
             session.edit([&](ynot::Project& p) { ynot::setInstrument(p, tid, ynot::makeBuiltin(ynot::kBuiltinSynth, "Ynot Synth")); });
+        });
+        choose.addItem("Ynot Drums (built-in drum kit)", [&session, tid = track.id] {
+            session.edit([&](ynot::Project& p) { ynot::setInstrument(p, tid, ynot::makeBuiltin(ynot::kBuiltinDrums, "Ynot Drums")); });
         });
         choose.addSeparator();
         auto installed = pluginBrowserMenu(host.availablePlugins(true), [&session, &host, tid = track.id](const juce::PluginDescription& d) {

@@ -58,11 +58,20 @@ struct MidiNote {
     int velocity = 100;
 };
 
+// A drum/step pattern's grid. The notes in the clip are the truth (they play anywhere);
+// this tells the step editor how to show them.
+struct StepPattern {
+    int64_t stepTicks = kTicksPerQuarter / 4;  // 1/16
+    double swingPercent = 50.0;                // 50 = straight
+    std::vector<int> rows;                     // note numbers, top to bottom
+};
+
 struct MidiClip {
     std::string id;
     int64_t startTick = 0;
     int64_t lengthTick = 0;
     std::vector<MidiNote> notes;
+    std::optional<StepPattern> steps;  // set for step-sequencer patterns
 };
 
 struct AutomationPoint {

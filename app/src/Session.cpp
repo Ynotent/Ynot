@@ -58,10 +58,10 @@ void Session::save() {
     ynot::saveProjectPackage(project_, dir_.getFullPathName().toStdString());
 }
 
-void Session::edit(const std::function<void(ynot::Project&)>& fn) {
+void Session::edit(const std::function<void(ynot::Project&)>& fn, bool undoStep) {
     if (!loaded_) return;
     host_.captureState(project_);  // keep plugin tweaks made in their editors
-    history_.record(project_);
+    if (undoStep) history_.record(project_);
     fn(project_);
     rebuild();
 }
@@ -80,6 +80,20 @@ bool Session::redo() {
     history_.redo(project_);
     rebuild();
     return true;
+}
+
+void Session::setAuditionTrack(const std::string& trackId) {
+    if (auditionTrack_ == trackId) return;
+    auditionTrack_ = trackId;
+    rebuild();
+}
+
+void Session::auditionNote(int note, int velocity) {
+    // Same path as a MIDI keyboard: lock-free into the audio thread.
+    collector_.addMessageToQueue(juce::MidiMessage::noteOn(1, note, static_cast<juce::uint8>(std::clamp(velocity, 1, 127)))
+                                     .withTimeStamp(juce::Time::getMillisecondCounterHiRes() * 0.001));
+    collector_.addMessageToQueue(juce::MidiMessage::noteOff(1, note)
+                                     .withTimeStamp(juce::Time::getMillisecondCounterHiRes() * 0.001 + 0.15));
 }
 
 void Session::pushMixToEngine() {
@@ -207,7 +221,7 @@ void Session::rebuild() {
             if (t->armed && t->kind == ynot::TrackKind::Audio) opts.monitorInputs[t->id] = inputFor(t->id);
     bool liveMidi = false;
     for (const auto* t : project_.orderedTracks())
-        if (t->armed && t->kind == ynot::TrackKind::Instrument) {
+        if (t->kind == ynot::TrackKind::Instrument && (t->armed || t->id == auditionTrack_)) {
             opts.liveMidiTracks.insert(t->id);  // armed instruments play from MIDI input
             liveMidi = true;
         }

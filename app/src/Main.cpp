@@ -548,6 +548,43 @@ static int runSmokeTest(const juce::File& dir) {
         outDir.deleteRecursively();
     }
 
+    {   // Drums: a step pattern plays through the session; auditioning works with the transport stopped.
+        std::string drums, clip;
+        session.edit([&](ynot::Project& p) {
+            drums = ynot::addDrumTrack(p, 0, 1);
+            clip = p.findTrack(drums)->midiClips[0].id;
+            for (int s : {0, 4, 8, 12}) ynot::setStep(p, drums, clip, 36, s, 110);
+            for (auto& t : p.tracks) t.mute = t.id != drums;
+        });
+        std::vector<float> silence(512), outL(512), outR(512);
+        const float* ins[2] = {silence.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        auto peakOf = [&](int blocks) {
+            float pk = 0;
+            for (int b = 0; b < blocks; ++b) {
+                session.processForTesting(ins, 2, outs, 2, 512);
+                for (float v : outL) pk = std::max(pk, std::abs(v));
+            }
+            return pk;
+        };
+        session.seekToTick(0);
+        session.play();
+        const float playing = peakOf(60);
+        session.stop();
+        peakOf(100);  // let the tail die
+        session.setAuditionTrack(drums);
+        const float before = peakOf(10);
+        session.auditionNote(38, 110);
+        juce::Thread::sleep(5);
+        const float audition = peakOf(20);
+        session.setAuditionTrack({});
+        expect(playing > 0.1f, "a drum pattern made in the step sequencer plays");
+        expect(before < 1e-4f && audition > 0.05f, "clicking a drum name auditions it with the transport stopped");
+        session.edit([&](ynot::Project& p) {
+            for (auto& t : p.tracks) t.mute = false;
+        });
+    }
+
     {   // Tempo: a change at bar 3 moves the playhead's time but not its bar; undo restores it.
         const int64_t bar3 = 2 * session.project().barTicks();
         session.seekToTick(bar3 + ynot::kTicksPerQuarter);

@@ -35,7 +35,11 @@ public:
     juce::File packageDir() const { return dir_; }
 
     // Edits (message thread). Each one rebuilds the engine.
-    void edit(const std::function<void(ynot::Project&)>& fn);
+    void edit(const std::function<void(ynot::Project&)>& fn, bool undoStep = true);
+    void recordUndoStep() { if (loaded_) history_.record(project_); }  // before edit(fn, false) series
+    // Step editor: the open pattern's track hears auditions (and live MIDI) even when not armed.
+    void setAuditionTrack(const std::string& trackId);
+    void auditionNote(int note, int velocity);
     void freeze(const std::string& trackId);
     void reload() { rebuild(); }  // re-resolve plugins/media without an undo step
     bool undo();
@@ -261,6 +265,7 @@ private:
     static constexpr int64_t kNoSeek = std::numeric_limits<int64_t>::min();
     std::atomic<int64_t> pendingSeek_{kNoSeek};
     int simulatedInputs_ = 0, simulatedOutputs_ = 2;
+    std::string auditionTrack_;
     static constexpr int kMaxMeteredInputs = 64;
     std::atomic<float> inputPeaks_[kMaxMeteredInputs] = {};
     std::atomic<int> mainOutputPair_{0};

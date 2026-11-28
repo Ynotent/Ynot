@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 
+#include "ynot/drums.hpp"
 #include "ynot/project_format.hpp"
 
 namespace ynot {
@@ -129,7 +130,7 @@ private:
 }  // namespace
 
 std::vector<std::string> BuiltinPluginHost::builtinIds() {
-    return {kBuiltinSynth, kBuiltinGain, kBuiltinFilter};
+    return {kBuiltinSynth, kBuiltinGain, kBuiltinFilter, kBuiltinDrums};
 }
 
 bool BuiltinPluginHost::isAvailable(const PluginInstance& p) const {
@@ -141,6 +142,7 @@ bool BuiltinPluginHost::isAvailable(const PluginInstance& p) const {
 std::unique_ptr<PluginProcessor> BuiltinPluginHost::load(const PluginInstance& p, double sr, int) {
     if (!isAvailable(p)) return nullptr;
     if (p.uid == kBuiltinSynth) return std::make_unique<BasicSynth>(p.params, sr);
+    if (p.uid == kBuiltinDrums) return makeDrumKit(p.params, sr);
     if (p.uid == kBuiltinGain) return std::make_unique<GainFx>(p.params);
     if (p.uid == kBuiltinFilter) return std::make_unique<LowpassFx>(p.params, sr);
     return nullptr;

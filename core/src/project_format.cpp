@@ -171,6 +171,14 @@ Json trackToJson(const Track& t) {
             notes.push(JsonArray{Json(n.tick), Json(n.lengthTick), Json(n.pitch), Json(n.velocity)});
         }
         cj["notes"] = notes;
+        if (c.steps) {
+            Json st = Json::object(), rows = Json::array();
+            st["stepTicks"] = c.steps->stepTicks;
+            st["swing"] = c.steps->swingPercent;
+            for (int r : c.steps->rows) rows.push(Json(static_cast<int64_t>(r)));
+            st["rows"] = rows;
+            cj["steps"] = st;
+        }
         mc.push(cj);
     }
     j["midiClips"] = mc;
@@ -251,6 +259,14 @@ Track trackFromJson(const Json& j) {
                     c.notes.push_back({a[0].asInt(), a[1].asInt(), static_cast<int>(a[2].asInt()),
                                        static_cast<int>(a[3].asInt())});
                 }
+            if (auto* st = cj.find("steps"); st && st->isObject()) {
+                StepPattern sp;
+                sp.stepTicks = std::max<int64_t>(1, st->getInt("stepTicks", kTicksPerQuarter / 4));
+                sp.swingPercent = std::clamp(st->getNumber("swing", 50.0), 50.0, 75.0);
+                if (auto* rows = st->find("rows"); rows && rows->isArray())
+                    for (auto& r : rows->asArray()) sp.rows.push_back(static_cast<int>(r.asInt()));
+                c.steps = sp;
+            }
             t.midiClips.push_back(c);
         }
     if (auto* au = j.find("automation"); au && au->isArray())

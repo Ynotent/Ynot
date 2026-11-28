@@ -64,7 +64,7 @@ Project makeDemoProject(const std::string& packageDir) {
     keys.order = 2;
     keys.color = "#2BD9A8";
     keys.instrument = makeBuiltin(kBuiltinSynth, "Ynot Synth");
-    MidiClip mc{newId(), 0, 8 * kTicksPerQuarter, {}};
+    MidiClip mc{newId(), 0, 8 * kTicksPerQuarter, {}, std::nullopt};
     int chord[] = {60, 64, 67};
     for (int bar = 0; bar < 2; ++bar)
         for (int n : chord) mc.notes.push_back({bar * 4 * kTicksPerQuarter, 3 * kTicksPerQuarter, n + bar * 5, 96});
@@ -82,7 +82,7 @@ Project makeDemoProject(const std::string& packageDir) {
     strings.color = "#FFB547";
     strings.instrument = makeExternal(PluginFormat::AudioUnit, "aumu:Orch:Acme", "Acme Orchestra", "Acme Audio");
     strings.instrument->seenOn = {Platform::MacOS};
-    MidiClip sc{newId(), 0, 8 * kTicksPerQuarter, {{0, 8 * kTicksPerQuarter, 48, 80}}};
+    MidiClip sc{newId(), 0, 8 * kTicksPerQuarter, {{0, 8 * kTicksPerQuarter, 48, 80}}, std::nullopt};
     strings.midiClips.push_back(sc);
     p.tracks.push_back(strings);
 

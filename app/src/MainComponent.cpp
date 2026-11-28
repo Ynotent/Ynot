@@ -39,6 +39,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
       theme_(Theme::load(true)),
       arrange_(session, host, theme_),
       mixer_(session, theme_),
+      steps_(session, theme_),
       keyboard_(session.keyboardState(), juce::KeyboardComponentBase::horizontalKeyboard) {
     theme_.apply(lnf_);
     setLookAndFeel(&lnf_);
@@ -47,8 +48,12 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_,
-                    &mixerButton_, &exportButton_})
+                    &mixerButton_, &exportButton_, &stepsButton_})
         addAndMakeVisible(*b);
+    addChildComponent(steps_);
+    stepsButton_.setTooltip("Step sequencer for drum patterns (B)");
+    stepsButton_.onClick = [this] { toggleSteps(); };
+    arrange_.onOpenPattern = [this](const std::string& t, const std::string& c) { openPattern(t, c); };
     exportButton_.setTooltip("Export the song as WAV, FLAC, M4A... (Cmd/Ctrl+E)");
     exportButton_.onClick = [this] { ExportPanel::show(session_, theme_); };
     addChildComponent(mixer_);
@@ -100,7 +105,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_,
-                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_, &mixerButton_, &exportButton_})
+                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_, &mixerButton_, &exportButton_, &stepsButton_})
         b->setMouseClickGrabsKeyboardFocus(false);
     // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
     // (play/stop) and Return (to start) still work while the keyboard has focus.
@@ -182,6 +187,7 @@ void MainComponent::resized() {
         b->setVisible(!compact());
     toolbar.push_back(&loopButton_);  // phones too: looping is part of playing
     toolbar.push_back(&mixerButton_);
+    toolbar.push_back(&stepsButton_);
     if (!compact()) {
         for (auto* b : {&countInButton_, &monitorButton_, &punchButton_, &quantizeButton_, &timeSigButton_,
                         &tempoButton_, &rateButton_, &addTrackButton_})
@@ -241,13 +247,18 @@ void MainComponent::resized() {
         keyboard_.setBounds(r.removeFromBottom(touch ? 140 : 90));
         r.removeFromBottom(8);
     }
-    if (mixer_.isVisible()) {
-        // Room for both: the mixer docks under the arrangement. Otherwise (phones) it takes over.
+    // Bottom panel (mixer or step sequencer): docks under the arrangement when there's room,
+    // otherwise (phones) takes over the view.
+    juce::Component* panel = mixer_.isVisible() ? static_cast<juce::Component*>(&mixer_)
+                             : steps_.isVisible() ? static_cast<juce::Component*>(&steps_)
+                                                  : nullptr;
+    if (panel) {
         if (r.getHeight() >= 620 && !compact()) {
-            mixer_.setBounds(r.removeFromBottom(std::min(340, r.getHeight() / 2)));
+            const int want = panel == &steps_ ? 60 + 26 * 11 : 340;
+            panel->setBounds(r.removeFromBottom(std::min(want, r.getHeight() / 2)));
             r.removeFromBottom(8);
         } else {
-            mixer_.setBounds(r);
+            panel->setBounds(r);
             r = r.withHeight(0);
         }
     }
@@ -281,6 +292,8 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
     if (key == juce::KeyPress('e', cmd, 0)) return ExportPanel::show(session_, theme_), true;
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'x' || key.getTextCharacter() == 'X'))
         return toggleMixer(), true;
+    if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'b' || key.getTextCharacter() == 'B'))
+        return toggleSteps(), true;
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'l' || key.getTextCharacter() == 'L')) {
         session_.setLoopEnabled(!session_.loopEnabled());
         refresh();
@@ -341,7 +354,9 @@ void MainComponent::refresh() {
     punchButton_.setToggleState(session_.punchEnabled(), juce::dontSendNotification);
     loopButton_.setToggleState(session_.loopEnabled(), juce::dontSendNotification);
     mixerButton_.setToggleState(mixer_.isVisible(), juce::dontSendNotification);
+    stepsButton_.setToggleState(steps_.isVisible(), juce::dontSendNotification);
     mixer_.refresh();
+    if (steps_.isVisible()) steps_.refresh();
     if (session_.hasProject())
         timeSigButton_.setButtonText(juce::String(session_.project().timeSigNumerator) + "/" +
                                      juce::String(session_.project().timeSigDenominator));
@@ -510,6 +525,12 @@ void MainComponent::addTrackItems(juce::PopupMenu& m) {
     m.addItem("Instrument track (MIDI, starts with Ynot Synth)", session_.hasProject(), false, [this] {
         session_.edit([](ynot::Project& p) { ynot::addTrack(p, ynot::TrackKind::Instrument); });
     });
+    m.addItem("Drum track (Ynot Drums + step sequencer)", session_.hasProject(), false, [this] {
+        const int64_t bar = session_.positionTick() / session_.project().barTicks() * session_.project().barTicks();
+        std::string id;
+        session_.edit([&](ynot::Project& p) { id = ynot::addDrumTrack(p, bar, 1); });
+        if (const auto* t = session_.project().findTrack(id); t && !t->midiClips.empty()) openPattern(id, t->midiClips[0].id);
+    });
 }
 
 void MainComponent::addPluginItems(juce::PopupMenu& m) {
@@ -570,7 +591,24 @@ void MainComponent::addTimeSignatureItems(juce::PopupMenu& m) {
 }
 
 void MainComponent::toggleMixer() {
+    steps_.setVisible(false);
     mixer_.setVisible(!mixer_.isVisible());
+    resized();
+    refresh();
+}
+
+void MainComponent::toggleSteps() {
+    mixer_.setVisible(false);
+    steps_.setVisible(!steps_.isVisible());
+    if (!steps_.isVisible()) session_.setAuditionTrack({});
+    resized();
+    refresh();
+}
+
+void MainComponent::openPattern(const std::string& trackId, const std::string& clipId) {
+    mixer_.setVisible(false);
+    steps_.open(trackId, clipId);
+    steps_.setVisible(true);
     resized();
     refresh();
 }

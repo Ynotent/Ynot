@@ -56,7 +56,7 @@ TEST("tempo: the click follows tempo changes") {
         Track t;  // a track so the song has length
         t.id = "t";
         t.kind = TrackKind::Instrument;
-        t.midiClips = {{"m", 0, 3 * kBar, {}}};
+        t.midiClips = {{"m", 0, 3 * kBar, {}, std::nullopt}};
         return t;
     }());
     BuiltinPluginHost host;
@@ -91,7 +91,7 @@ TEST("tempo: notes after a tempo change play at the right time") {
     t.kind = TrackKind::Instrument;
     t.instrument = makeBuiltin(kBuiltinSynth, "Synth");
     // Beat 2 of bar 2 = 2 s + 1 s.
-    t.midiClips = {{"m", 0, 3 * kBar, {{kBar + kQ, kQ / 4, 69, 100}}}};
+    t.midiClips = {{"m", 0, 3 * kBar, {{kBar + kQ, kQ / 4, 69, 100}}, std::nullopt}};
     p.tracks = {t};
     BuiltinPluginHost host;
     PackageMediaProvider media(th::tempDir("tempo-note"));
@@ -119,7 +119,7 @@ TEST("tempo edits: audio keeps its real length, clips stay on their bars, undo-a
     Track k;
     k.id = "k";
     k.kind = TrackKind::Instrument;
-    k.midiClips = {{"mc", kBar, kBar, {{0, kQ, 60, 100}}}};
+    k.midiClips = {{"mc", kBar, kBar, {{0, kQ, 60, 100}}, std::nullopt}};
     p.tracks = {a, k};
 
     setTempo(p, 60);  // half speed: 2 s of audio is now half a bar

@@ -49,6 +49,8 @@ public:
     // Audio import hooks (set by the main window).
     std::function<void(const juce::Array<juce::File>&, const std::string& trackId, int64_t startTick)> onImportFiles;
     std::function<void(const std::string& trackId)> onImportRequest;
+    // Open a MIDI clip in the step sequencer (set by the main window).
+    std::function<void(const std::string& trackId, const std::string& clipId)> onOpenPattern;
     bool hasSelection() const { return !selected_.clipId.empty(); }
     // While the on-screen keyboard is open, letter keys play notes instead of editing.
     void setMusicalTyping(bool on) { musicalTyping_ = on; }

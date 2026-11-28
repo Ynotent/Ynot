@@ -359,7 +359,7 @@ TEST("punch: MIDI replaces notes only inside the range") {
     t.id = "k";
     t.kind = TrackKind::Instrument;
     const int64_t b = kTicksPerQuarter;
-    t.midiClips = {{"c", 0, 4 * b, {{0, b / 2, 36, 100}, {b, b / 2, 38, 100}, {2 * b, b / 2, 36, 100}, {3 * b, b / 2, 38, 100}}}};
+    t.midiClips = {{"c", 0, 4 * b, {{0, b / 2, 36, 100}, {b, b / 2, 38, 100}, {2 * b, b / 2, 36, 100}, {3 * b, b / 2, 38, 100}}, std::nullopt}};
     CHECK_EQ(eraseNotesInRange(t, b, 3 * b), 2);
     CHECK_EQ(t.midiClips[0].notes.size(), size_t(2));
     CHECK_EQ(t.midiClips[0].notes[1].tick, 3 * b);
