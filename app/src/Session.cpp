@@ -30,6 +30,7 @@ Session::Session(JucePluginHost& host) : host_(host) {
 }
 
 Session::~Session() {
+    alive_->store(false);
     if (recording_) stopRecording();
     keyboardState_.removeListener(&collector_);
     device_.manager().removeMidiInputDeviceCallback({}, this);
@@ -38,6 +39,7 @@ Session::~Session() {
 }
 
 void Session::newDemo(const juce::File& dir) {
+    shownChords_.clear();
     dir.createDirectory();
     project_ = ynot::makeDemoProject(dir.getFullPathName().toStdString());
     history_.clear();
@@ -52,6 +54,7 @@ void Session::newDemo(const juce::File& dir) {
 }
 
 void Session::newSong(const juce::File& dir) {
+    shownChords_.clear();
     dir.createDirectory();
     ynot::Project p;
     p.id = ynot::newId();
@@ -116,6 +119,7 @@ void Session::rememberRecent(const juce::File& dir) {
 }
 
 void Session::open(const juce::File& dir) {
+    shownChords_.clear();
     project_ = ynot::loadProjectPackage(dir.getFullPathName().toStdString());
     modified_ = false;
     rememberRecent(dir);
@@ -708,6 +712,147 @@ void Session::applyMidiControl(const MidiMapping& map, int value) {
         else if (map.target == MidiTarget::TrackPan) setTrackPan(id, ccToPan(value));
     }
     if (onChange) onChange();
+}
+
+// ---------------------------------------------------------------- AI + sampler
+
+template <typename Work, typename Then>
+void Session::runInBackground(Work work, Then then) {
+    auto alive = alive_;
+    juce::Thread::launch([alive, work = std::move(work), then = std::move(then)]() mutable {
+        auto result = work();
+        juce::MessageManager::callAsync([alive, then = std::move(then), result = std::move(result)]() mutable {
+            if (alive->load()) then(std::move(result));
+        });
+    });
+}
+
+ynot::AiAvailability Session::aiAvailable(ynot::AiFeature f) {
+    return ynot::aiAvailability(f, ynot::Tier::Pro, ynot::currentPlatform(), true, false);
+}
+
+void Session::analyzeSong(std::function<void(const SongAnalysis&)> done) {
+    if (!loaded_) return;
+    const auto avail = aiAvailable(ynot::AiFeature::ChordAndKeyDetection);
+    if (!avail.available) {
+        done({{}, {}, juce::String(avail.reason)});
+        return;
+    }
+    runInBackground(
+        [p = project_, dir = dir_.getFullPathName().toStdString()] {
+            ynot::PackageMediaProvider media(dir);  // its own decoder cache: no sharing with the UI
+            SongAnalysis r;
+            r.key = ynot::detectSongKey(p, media);
+            r.chords = ynot::detectChords(p, media);
+            return r;
+        },
+        [done](SongAnalysis r) { done(r); });
+}
+
+int Session::applyKeyToTune(const ynot::KeyEstimate& k) {
+    int n = 0;
+    for (const auto& t : project_.tracks)
+        for (const auto& fx : t.inserts) n += fx.uid == ynot::kBuiltinTune ? 1 : 0;
+    if (n == 0) return 0;
+    edit([&](ynot::Project& p) {
+        for (auto& t : p.tracks)
+            for (auto& fx : t.inserts)
+                if (fx.uid == ynot::kBuiltinTune) {
+                    fx.params["key"] = static_cast<int64_t>(k.tuneKey());
+                    fx.params["scale"] = static_cast<int64_t>(k.tuneScale());
+                }
+    });
+    return n;
+}
+
+void Session::convertClipToMidi(const std::string& trackId, const std::string& clipId,
+                                std::function<void(const juce::String&)> done) {
+    if (!loaded_) return;
+    const auto avail = aiAvailable(ynot::AiFeature::TranscribeAudioToMidi);
+    if (!avail.available) {
+        done(juce::String(avail.reason));
+        return;
+    }
+    runInBackground(
+        [p = project_, dir = dir_.getFullPathName().toStdString(), trackId, clipId] {
+            ynot::PackageMediaProvider media(dir);
+            ynot::Project copy = p;
+            auto id = ynot::audioClipToMidi(copy, media, trackId, clipId);
+            std::optional<ynot::Track> made;
+            if (id) made = *copy.findTrack(*id);
+            return made;
+        },
+        [this, done, trackId](std::optional<ynot::Track> made) {
+            if (!made) {
+                done("No clear melody was found. Audio to MIDI works on one note at a time (a voice, bass or lead).");
+                return;
+            }
+            edit([&](ynot::Project& p) {
+                // Right under the source track.
+                auto it = std::find_if(p.tracks.begin(), p.tracks.end(), [&](const ynot::Track& t) { return t.id == trackId; });
+                p.tracks.insert(it == p.tracks.end() ? p.tracks.end() : it + 1, *made);
+            });
+            done({});
+        });
+}
+
+void Session::detectClipTempo(const std::string& trackId, const std::string& clipId,
+                              std::function<void(ynot::TempoEstimate)> done) {
+    if (!loaded_ || !media_) return;
+    const auto audio = ynot::clipAudio(project_, *media_, trackId, clipId);
+    runInBackground([audio] { return ynot::detectTempo(audio); }, [done](ynot::TempoEstimate e) { done(e); });
+}
+
+juce::String Session::newSamplerFromFileNow(const juce::File& file, std::string& trackId) {
+    if (!loaded_) return "Open or create a song first.";
+    auto decoded = decodeAudioFile(file);
+    if (!decoded.ok) return decoded.error;
+    edit([&](ynot::Project& p) {
+        trackId = ynot::addSamplerTrack(p, dir_.getFullPathName().toStdString(), decoded.audio,
+                                        file.getFileNameWithoutExtension().toStdString());
+    });
+    return {};
+}
+
+void Session::newSamplerFromFile(const juce::File& file, std::function<void(const juce::String&, const std::string&)> done) {
+    if (!loaded_) return;
+    runInBackground([file] { return decodeAudioFile(file); },
+                    [this, file, done](DecodedAudio d) {
+                        if (!d.ok) {
+                            done(d.error, {});
+                            return;
+                        }
+                        std::string id;
+                        edit([&](ynot::Project& p) {
+                            id = ynot::addSamplerTrack(p, dir_.getFullPathName().toStdString(), d.audio,
+                                                       file.getFileNameWithoutExtension().toStdString());
+                        });
+                        done({}, id);
+                    });
+}
+
+void Session::loadSampleFile(const std::string& trackId, const juce::File& file, std::function<void(const juce::String&)> done) {
+    if (!loaded_) return;
+    runInBackground([file] { return decodeAudioFile(file); },
+                    [this, trackId, done](DecodedAudio d) {
+                        if (!d.ok) {
+                            done(d.error);
+                            return;
+                        }
+                        edit([&](ynot::Project& p) { ynot::loadSample(p, dir_.getFullPathName().toStdString(), trackId, d.audio); });
+                        done({});
+                    });
+}
+
+std::string Session::sendClipToSampler(const std::string& trackId, const std::string& clipId) {
+    if (!loaded_ || !media_) return {};
+    const auto audio = ynot::clipAudio(project_, *media_, trackId, clipId);
+    if (audio.frames() <= 0) return {};
+    const auto* t = project_.findTrack(trackId);
+    const std::string name = (t ? t->name : std::string("Clip")) + " chops";
+    std::string id;
+    edit([&](ynot::Project& p) { id = ynot::addSamplerTrack(p, dir_.getFullPathName().toStdString(), audio, name); });
+    return id;
 }
 
 void Session::setMidiClockOut(bool on) {

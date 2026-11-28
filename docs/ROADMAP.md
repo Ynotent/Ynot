@@ -226,9 +226,21 @@ Done so far (built and tested on the Linux dev host only):
   per computer and follow mixer channel numbers. Transport buttons via MMC (the MPK25
   default) or learned CC buttons. Optional MIDI clock out (24 ppq, Start/Stop/Song Position)
   so the controller's arpeggiator and note repeat follow the tempo.
-- Verified for all of the above: core unit tests (106) and app smoke tests on Linux, plus
+- **Ynot Sampler (built-in, every platform):** load any audio file or send an audio clip
+  to it; auto-chop finds each hit and puts it on a pad (note 36 up = MPK pad bank A), or
+  equal slices (2-32); drag/add/remove slice lines; one-shot pads that cut themselves off;
+  Keys mode plays the sample chromatically from a root note with release, sustain pedal and
+  pitch bend; attack/release/tune. Sample is project media (syncs, freezes, exports).
+  Original Ynot design. Screenshot: docs/screenshots/sampler-and-chords.png.
+- **Ynot AI, on-device (M7, first part):** key detection (Krumhansl-Kessler profiles on
+  audio chroma + MIDI), chord detection along the timeline (shown above the ruler), "set
+  Ynot Tune to this key", tempo detection of a clip (offers to set the song tempo), and
+  audio-to-MIDI for one-note-at-a-time parts (voice, bass, lead) onto a new Ynot Synth
+  track. Plain DSP, no network or model download; runs in the background. Drum and
+  chopped-sampler tracks are left out of key/chord analysis.
+- Verified for all of the above: core unit tests (115) and app smoke tests on Linux, plus
   UI checks on a virtual display. Not yet verified by ear or on real interfaces: the drum
-  sounds, Ynot Tune on real vocals, a real MPK25, M4A/MP3 encoding on real Macs/PCs, multi-channel
+  sounds, Ynot Tune on real vocals, a real MPK25, the sampler and AI on real recordings, M4A/MP3 encoding on real Macs/PCs, multi-channel
   interfaces, and buffer/rate changes on hardware.
 
 - **Downloadable Mac app:**
@@ -336,6 +348,8 @@ Still to do:
   packet loss and reconnects. All replicas end byte-identical.
 
 ### M7: AI features
+- Done (on-device, every platform): chord and key detection, tempo detection,
+  audio-to-MIDI (monophonic), vocal tuning (Ynot Tune). Not yet: polyphonic audio-to-MIDI.
 - On-device: chord and key detection, vocal tuning.
 - On-device or cloud: stem separation, audio-to-MIDI, mix and mastering assistants.
 - Cloud: text-to-MIDI ideas.

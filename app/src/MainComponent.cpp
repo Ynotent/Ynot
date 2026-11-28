@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include "AiPanel.h"
+
 #include "AudioImporter.h"
 #include "AudioIOPanel.h"
 #include "ExportPanel.h"
@@ -42,6 +44,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
       inspector_(session, arrange_, theme_),
       mixer_(session, theme_),
       steps_(session, theme_),
+      sampler_(session, theme_),
       keyboard_(session.keyboardState(), juce::KeyboardComponentBase::horizontalKeyboard) {
     theme_.apply(lnf_);
     setLookAndFeel(&lnf_);
@@ -51,9 +54,20 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
              &startButton_, &playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_,
-                    &mixerButton_, &exportButton_, &stepsButton_})
+                    &mixerButton_, &exportButton_, &stepsButton_, &samplerButton_, &aiButton_})
         addAndMakeVisible(*b);
     addChildComponent(steps_);
+    addChildComponent(sampler_);
+    samplerButton_.setTooltip("Ynot Sampler: chop a sample onto pads (P)");
+    samplerButton_.onClick = [this] { toggleSampler(); };
+    sampler_.onRequestNewSampler = [this] { newSamplerTrack(); };
+    arrange_.onOpenSampler = [this](const std::string& t) { openSampler(t); };
+    aiButton_.setTooltip("Ynot AI: key & chords, audio to MIDI, tempo");
+    aiButton_.onClick = [this] {
+        juce::PopupMenu m;
+        addAiItems(m);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(aiButton_));
+    };
     stepsButton_.setTooltip("Step sequencer for drum patterns (B)");
     stepsButton_.onClick = [this] { toggleSteps(); };
     arrange_.onOpenPattern = [this](const std::string& t, const std::string& c) { openPattern(t, c); };
@@ -109,7 +123,8 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
              &startButton_, &playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_,
-                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_, &mixerButton_, &exportButton_, &stepsButton_})
+                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_, &mixerButton_, &exportButton_, &stepsButton_,
+                    &samplerButton_, &aiButton_})
         b->setMouseClickGrabsKeyboardFocus(false);
     // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
     // (play/stop) and Return (to start) still work while the keyboard has focus.
@@ -237,6 +252,8 @@ void MainComponent::layoutDesktop() {
     place(row2, undoButton_, 64);
     place(row2, redoButton_, 64);
     place(row2, keysButton_, 64, true);
+    place(row2, aiButton_, 50, true);
+    place(row2, samplerButton_, 80, true);
     place(row2, stepsButton_, 70, true);
     place(row2, mixerButton_, 70, true);
     place(row2, exportButton_, 80, true);
@@ -269,11 +286,12 @@ void MainComponent::layoutDesktop() {
         keyboard_.setBounds(r.removeFromBottom(90));
         r.removeFromBottom(8);
     }
-    juce::Component* panel = mixer_.isVisible() ? static_cast<juce::Component*>(&mixer_)
-                             : steps_.isVisible() ? static_cast<juce::Component*>(&steps_)
-                                                  : nullptr;
+    juce::Component* panel = mixer_.isVisible()     ? static_cast<juce::Component*>(&mixer_)
+                             : steps_.isVisible()   ? static_cast<juce::Component*>(&steps_)
+                             : sampler_.isVisible() ? static_cast<juce::Component*>(&sampler_)
+                                                    : nullptr;
     if (panel) {
-        const int want = panel == &steps_ ? 60 + 26 * 11 : 340;
+        const int want = panel == &steps_ ? 60 + 26 * 11 : panel == &sampler_ ? 330 : 340;
         panel->setBounds(r.removeFromBottom(std::min(want, r.getHeight() / 2)));
         r.removeFromBottom(8);
     }
@@ -312,6 +330,8 @@ void MainComponent::resized() {
     toolbar.push_back(&loopButton_);  // phones too: looping is part of playing
     toolbar.push_back(&mixerButton_);
     toolbar.push_back(&stepsButton_);
+    toolbar.push_back(&samplerButton_);
+    toolbar.push_back(&aiButton_);
     if (!compact()) {
         for (auto* b : {&countInButton_, &monitorButton_, &punchButton_, &quantizeButton_, &timeSigButton_,
                         &tempoButton_, &rateButton_, &addTrackButton_})
@@ -373,12 +393,13 @@ void MainComponent::resized() {
     }
     // Bottom panel (mixer or step sequencer): docks under the arrangement when there's room,
     // otherwise (phones) takes over the view.
-    juce::Component* panel = mixer_.isVisible() ? static_cast<juce::Component*>(&mixer_)
-                             : steps_.isVisible() ? static_cast<juce::Component*>(&steps_)
-                                                  : nullptr;
+    juce::Component* panel = mixer_.isVisible()     ? static_cast<juce::Component*>(&mixer_)
+                             : steps_.isVisible()   ? static_cast<juce::Component*>(&steps_)
+                             : sampler_.isVisible() ? static_cast<juce::Component*>(&sampler_)
+                                                    : nullptr;
     if (panel) {
         if (r.getHeight() >= 620 && !compact()) {
-            const int want = panel == &steps_ ? 60 + 26 * 11 : 340;
+            const int want = panel == &steps_ ? 60 + 26 * 11 : panel == &sampler_ ? 330 : 340;
             panel->setBounds(r.removeFromBottom(std::min(want, r.getHeight() / 2)));
             r.removeFromBottom(8);
         } else {
@@ -428,6 +449,8 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
         return toggleMixer(), true;
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'b' || key.getTextCharacter() == 'B'))
         return toggleSteps(), true;
+    if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'p' || key.getTextCharacter() == 'P'))
+        return toggleSampler(), true;
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'l' || key.getTextCharacter() == 'L')) {
         session_.setLoopEnabled(!session_.loopEnabled());
         refresh();
@@ -501,8 +524,10 @@ void MainComponent::refresh() {
     loopButton_.setToggleState(session_.loopEnabled(), juce::dontSendNotification);
     mixerButton_.setToggleState(mixer_.isVisible(), juce::dontSendNotification);
     stepsButton_.setToggleState(steps_.isVisible(), juce::dontSendNotification);
+    samplerButton_.setToggleState(sampler_.isVisible(), juce::dontSendNotification);
     mixer_.refresh();
     if (steps_.isVisible()) steps_.refresh();
+    if (sampler_.isVisible()) sampler_.refresh();
     if (session_.hasProject())
         timeSigButton_.setButtonText(juce::String(session_.project().timeSigNumerator) + "/" +
                                      juce::String(session_.project().timeSigDenominator));
@@ -667,7 +692,7 @@ void MainComponent::openRecent(const juce::File& dir) {
     }
 }
 
-juce::StringArray MainComponent::getMenuBarNames() { return {"File", "Edit", "Track", "Transport", "View"}; }
+juce::StringArray MainComponent::getMenuBarNames() { return {"File", "Edit", "Track", "Transport", "AI", "View"}; }
 
 juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&) {
     juce::PopupMenu m;
@@ -767,9 +792,13 @@ juce::PopupMenu MainComponent::getMenuForIndex(int index, const juce::String&) {
             m.addSubMenu("MIDI Controller", midi);
             break;
         }
-        case 4: {  // View
+        case 4:  // AI
+            addAiItems(m);
+            break;
+        case 5: {  // View
             add("Mixer", "X", true, mixer_.isVisible(), [this] { toggleMixer(); });
             add("Step Sequencer", "B", true, steps_.isVisible(), [this] { toggleSteps(); });
+            add("Sampler", "P", true, sampler_.isVisible(), [this] { toggleSampler(); });
             add("On-screen Keyboard", {}, true, keyboard_.isVisible(), [this] { showKeyboard(!keyboard_.isVisible()); });
             add("Inspector", "I", true, inspectorVisible_, [this] {
                 inspectorVisible_ = !inspectorVisible_;
@@ -895,6 +924,8 @@ void MainComponent::addTrackItems(juce::PopupMenu& m) {
         session_.edit([&](ynot::Project& p) { id = ynot::addDrumTrack(p, bar, 1); });
         if (const auto* t = session_.project().findTrack(id); t && !t->midiClips.empty()) openPattern(id, t->midiClips[0].id);
     });
+    m.addItem("Sampler track (Ynot Sampler: chop a sample onto pads)...", session_.hasProject(), false,
+              [this] { newSamplerTrack(); });
 }
 
 void MainComponent::addPluginItems(juce::PopupMenu& m) {
@@ -956,6 +987,7 @@ void MainComponent::addTimeSignatureItems(juce::PopupMenu& m) {
 
 void MainComponent::toggleMixer() {
     steps_.setVisible(false);
+    sampler_.setVisible(false);
     mixer_.setVisible(!mixer_.isVisible());
     resized();
     refresh();
@@ -963,14 +995,83 @@ void MainComponent::toggleMixer() {
 
 void MainComponent::toggleSteps() {
     mixer_.setVisible(false);
+    sampler_.setVisible(false);
     steps_.setVisible(!steps_.isVisible());
     if (!steps_.isVisible()) session_.setAuditionTrack({});
     resized();
     refresh();
 }
 
+void MainComponent::toggleSampler() {
+    mixer_.setVisible(false);
+    steps_.setVisible(false);
+    if (!sampler_.isVisible()) {
+        // The focused track's sampler if it has one.
+        const auto focus = arrange_.focusedTrackId();
+        if (ynot::samplerOf(session_.project(), focus)) sampler_.open(focus);
+    }
+    sampler_.setVisible(!sampler_.isVisible());
+    resized();
+    refresh();
+}
+
+void MainComponent::openSampler(const std::string& trackId) {
+    mixer_.setVisible(false);
+    steps_.setVisible(false);
+    sampler_.open(trackId);
+    sampler_.setVisible(true);
+    resized();
+    refresh();
+}
+
+void MainComponent::newSamplerTrack() {
+    if (!session_.hasProject()) return;
+    chooser_ = std::make_unique<juce::FileChooser>("Choose a sample (loop, break, one-shot, vocal...)", juce::File(),
+                                                   importFilePatterns());
+    chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this](const juce::FileChooser& fc) {
+                              const auto f = fc.getResult();
+                              if (f == juce::File()) return;
+                              juce::Component::SafePointer<MainComponent> safe(this);
+                              session_.newSamplerFromFile(f, [safe](const juce::String& err, const std::string& id) {
+                                  if (!safe) return;
+                                  if (err.isNotEmpty())
+                                      juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                                             "Can't load the sample", err);
+                                  else
+                                      safe->openSampler(id);
+                              });
+                          });
+}
+
+void MainComponent::addAiItems(juce::PopupMenu& m) {
+    const bool hasSong = session_.hasProject();
+    m.addSectionHeader("Ynot AI (runs on this device)");
+    m.addItem("Detect Key & Chords...", hasSong, false, [this] { AiResultsPanel::detectKeyAndChords(session_, theme_); });
+    m.addItem("Show Chords on the Timeline", !session_.shownChords().empty(), !session_.shownChords().empty(),
+              [this] { session_.setShownChords({}); });
+    m.addSeparator();
+    const auto tid = arrange_.selectedTrackId(), cid = arrange_.selectedClipId();
+    const bool audioClip = hasSong && !cid.empty() && !arrange_.selectedIsMidi();
+    const auto toMidi = Session::aiAvailable(ynot::AiFeature::TranscribeAudioToMidi);
+    m.addItem(audioClip ? juce::String("Audio to MIDI (selected clip)") : juce::String("Audio to MIDI (select an audio clip first)"),
+              audioClip && toMidi.available, false, [this, tid, cid] { aiAudioToMidi(session_, tid, cid); });
+    m.addItem(audioClip ? juce::String("Detect Tempo (selected clip)") : juce::String("Detect Tempo (select an audio clip first)"),
+              audioClip, false, [this, tid, cid] { aiDetectTempo(session_, tid, cid); });
+    m.addItem("Send Selected Clip to Sampler", audioClip, false, [this, tid, cid] {
+        const auto id = session_.sendClipToSampler(tid, cid);
+        if (!id.empty()) openSampler(id);
+    });
+    m.addSeparator();
+    m.addSectionHeader("Coming later (need Ynot's cloud service)");
+    for (auto f : {ynot::AiFeature::StemSeparation, ynot::AiFeature::AutoMixAssist, ynot::AiFeature::MasteringAssist,
+                   ynot::AiFeature::TextToMidiIdeas})
+        m.addItem(juce::String(ynot::toString(f)), false, false, [] {});
+}
+
 void MainComponent::openPattern(const std::string& trackId, const std::string& clipId) {
     mixer_.setVisible(false);
+    sampler_.setVisible(false);
     steps_.open(trackId, clipId);
     steps_.setVisible(true);
     resized();

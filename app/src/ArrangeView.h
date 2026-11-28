@@ -56,6 +56,7 @@ public:
     std::function<void(const std::string& trackId)> onFocusTrackChanged;
     // Open a MIDI clip in the step sequencer (set by the main window).
     std::function<void(const std::string& trackId, const std::string& clipId)> onOpenPattern;
+    std::function<void(const std::string& trackId)> onOpenSampler;  // show the sampler panel for a track
     bool hasSelection() const { return !selected_.clipId.empty(); }
     // Mouse selection: drag a box, Shift/Cmd-click to add or remove; edits act on all of them.
     int selectionCount() const { return static_cast<int>(selection_.size()); }

@@ -10,6 +10,7 @@
 
 #include <iostream>
 
+#include "AiPanel.h"
 #include "MainComponent.h"
 #include "AudioImporter.h"
 #include "PluginSandbox.h"
@@ -750,6 +751,60 @@ static int runSmokeTest(const juce::File& dir) {
         });
     }
 
+    {   // Ynot Sampler: a sample file becomes a sampler track, auto-chopped onto pads that play.
+        ynot::AudioBuffer hits;
+        hits.sampleRate = 44100;
+        hits.channels = 1;
+        hits.samples.assign(44100 * 2, 0.f);
+        for (int h = 0; h < 4; ++h)
+            for (int i = 0; i < 15000; ++i)
+                hits.samples[static_cast<size_t>(h * 22050 + i)] =
+                    static_cast<float>(0.6 * std::exp(-i / 3000.0) * std::sin(6.2831853 * (200 + 100 * h) * i / 44100.0));
+        const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("ynot-smoke-hits.wav");
+        ynot::writeFileBytes(wav.getFullPathName().toStdString(), ynot::encodeWavFloat32(hits));
+        std::string id;
+        const auto err = session.newSamplerFromFileNow(wav, id);
+        const auto* s = ynot::samplerOf(session.project(), id);
+        expect(err.isEmpty() && s && ynot::samplerSlices(*s).size() == 4,
+               "a sample file becomes a Ynot Sampler track, auto-chopped into its 4 hits");
+        session.edit([&](ynot::Project& p) {
+            for (auto& t : p.tracks) t.mute = t.id != id;
+        });
+        session.setAuditionTrack(id);
+        std::vector<float> silence(512), outL(512), outR(512);
+        const float* ins[2] = {silence.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        auto peakOf = [&](int blocks) {
+            float pk = 0;
+            for (int b = 0; b < blocks; ++b) {
+                session.processForTesting(ins, 2, outs, 2, 512);
+                for (float v : outL) pk = std::max(pk, std::abs(v));
+                juce::Thread::sleep(1);
+            }
+            return pk;
+        };
+        const float quiet = peakOf(5);
+        session.auditionNote(38, 110);  // pad 3
+        juce::Thread::sleep(5);
+        const float pad = peakOf(20);
+        session.setAuditionTrack({});
+        expect(quiet < 1e-4f && pad > 0.05f, "a sampler pad plays its slice (as an MPK pad would)");
+        session.undo();  // unmute
+        session.undo();  // remove the sampler track
+        wav.deleteFile();
+    }
+
+    {   // Ynot AI runs on this device: key of the demo song.
+        const auto avail = Session::aiAvailable(ynot::AiFeature::ChordAndKeyDetection);
+        ynot::PackageMediaProvider media(session.packageDir().getFullPathName().toStdString());
+        const auto key = ynot::detectSongKey(session.project(), media);
+        const auto chords = ynot::detectChords(session.project(), media);
+        std::cout << "  info detected key of the demo song: " << key.name() << ", " << chords.size() << " chord spans" << std::endl;
+        expect(avail.available && avail.runtime == ynot::AiRuntime::OnDevice && !chords.empty(),
+               "key & chord detection runs on this device");
+        expect(Session::aiAvailable(ynot::AiFeature::TranscribeAudioToMidi).available, "audio to MIDI is available on this device");
+    }
+
     {   // Save As copies the song (with its recordings) and continues in the copy; edits mark it unsaved.
         session.edit([&](ynot::Project& p) { p.tracks[0].name = "Lead vocal"; });
         const bool markedEdited = session.isModified();
@@ -906,11 +961,32 @@ public:
         window_ = std::make_unique<MainWindow>(getApplicationName(), *session_, *host_);
         if (args.contains("--show-keys"))
             if (auto* mc = dynamic_cast<MainComponent*>(window_->getContentComponent())) mc->showKeyboard(true);
+        if (args.contains("--show-chords") && session_->hasProject()) {  // UI checks: detected chords on the ruler
+            ynot::PackageMediaProvider media(session_->packageDir().getFullPathName().toStdString());
+            session_->setShownChords(ynot::detectChords(session_->project(), media));
+        }
+        if (args.contains("--show-sampler")) {  // UI checks: --show-sampler [sample file to load]
+            const juce::File f(args[args.indexOf("--show-sampler") + 1].unquoted());
+            std::string id;
+            if (f.existsAsFile()) session_->newSamplerFromFileNow(f, id);
+        }
+        if (args.contains("--show-sampler"))
+            if (auto* mc = dynamic_cast<MainComponent*>(window_->getContentComponent())) mc->showPanel("sampler");
         if (args.contains("--screenshot")) {
             int i = args.indexOf("--screenshot");
             juce::File png(args[i + 1].unquoted());
             int w = args[i + 2].getIntValue(), h = args[i + 3].getIntValue();
-            auto* content = window_->getContentComponent();
+            juce::Component* content = window_->getContentComponent();
+            if (args.contains("--ai-panel") && session_->hasProject()) {  // UI checks: the Key & Chords window
+                ynot::PackageMediaProvider media(session_->packageDir().getFullPathName().toStdString());
+                Session::SongAnalysis r{ynot::detectSongKey(session_->project(), media),
+                                        ynot::detectChords(session_->project(), media), {}};
+                static Theme theme = Theme::load(true);
+                aiPanel_ = std::make_unique<AiResultsPanel>(*session_, theme, r);
+                content = aiPanel_.get();
+                w = content->getWidth();
+                h = content->getHeight();
+            }
             content->setSize(w, h);
             juce::Timer::callAfterDelay(300, [content, png] {
                 auto img = content->createComponentSnapshot(content->getLocalBounds(), true, 2.0f);
@@ -943,6 +1019,7 @@ private:
     std::unique_ptr<JucePluginHost> host_;
     std::unique_ptr<Session> session_;
     std::unique_ptr<MainWindow> window_;
+    std::unique_ptr<juce::Component> aiPanel_;
     std::unique_ptr<SimulatedAudio> simulated_;
 };
 

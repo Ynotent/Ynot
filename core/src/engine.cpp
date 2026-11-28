@@ -1,4 +1,5 @@
 #include "ynot/engine.hpp"
+#include "ynot/sampler.hpp"
 
 #include <algorithm>
 #include <array>
@@ -162,7 +163,7 @@ private:
 }  // namespace
 
 std::vector<std::string> BuiltinPluginHost::builtinIds() {
-    return {kBuiltinSynth, kBuiltinGain, kBuiltinFilter, kBuiltinDrums, kBuiltinTune};
+    return {kBuiltinSynth, kBuiltinGain, kBuiltinFilter, kBuiltinDrums, kBuiltinTune, kBuiltinSampler};
 }
 
 bool BuiltinPluginHost::isAvailable(const PluginInstance& p) const {
@@ -176,6 +177,7 @@ std::unique_ptr<PluginProcessor> BuiltinPluginHost::load(const PluginInstance& p
     if (p.uid == kBuiltinSynth) return std::make_unique<BasicSynth>(p.params, sr);
     if (p.uid == kBuiltinDrums) return makeDrumKit(p.params, sr);
     if (p.uid == kBuiltinTune) return makePitchCorrector(p.params, sr);
+    if (p.uid == kBuiltinSampler) return makeSampler(p.params, nullptr, sr);  // the engine supplies the sample
     if (p.uid == kBuiltinGain) return std::make_unique<GainFx>(p.params);
     if (p.uid == kBuiltinFilter) return std::make_unique<LowpassFx>(p.params, sr);
     return nullptr;
@@ -309,7 +311,16 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
         }
 
         if (t.instrument && !t.instrument->bypassed) {
-            ts->instrument = host.load(*t.instrument, sr, opts.maxBlock);
+            if (t.instrument->format == PluginFormat::Builtin && t.instrument->uid == kBuiltinSampler) {
+                // The sampler plays project media, which only the engine has.
+                const MediaRef* m = project.findMedia(t.instrument->params.getString("mediaId", ""));
+                const AudioBuffer* b = m ? media.get(*m) : nullptr;
+                if (m && !b)
+                    issues_.push_back({t.id, "The sample in '" + t.name + "' is not available on this device yet."});
+                ts->instrument = makeSampler(t.instrument->params, b, sr);
+            } else {
+                ts->instrument = host.load(*t.instrument, sr, opts.maxBlock);
+            }
             if (!ts->instrument)
                 issues_.push_back({t.id, "Instrument '" + t.instrument->name + "' (" +
                                              toString(t.instrument->format) +

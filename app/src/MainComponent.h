@@ -10,6 +10,7 @@
 #include "InspectorView.h"
 #include "MixerView.h"
 #include "StepSequencerView.h"
+#include "SamplerView.h"
 #include "Session.h"
 #include "Theme.h"
 #include "ynot/ui_layout.hpp"
@@ -116,6 +117,13 @@ private:
     void addLoopItems(juce::PopupMenu& m);
     void toggleMixer();
     void toggleSteps();
+public:
+    void showPanel(const juce::String& which) { if (which == "sampler") toggleSampler(); }
+private:
+    void toggleSampler();
+    void openSampler(const std::string& trackId);
+    void newSamplerTrack();
+    void addAiItems(juce::PopupMenu& m);
     void openPattern(const std::string& trackId, const std::string& clipId);
     // Small dialog asking for a number; `onOk` gets the value if it's within [lo, hi].
     void askNumber(const juce::String& title, const juce::String& message, double initial, double lo, double hi,
@@ -134,7 +142,7 @@ private:
         recordButton_{IconButton::Icon::Record};
     juce::TextButton clickButton_{"Click"};
     juce::TextButton countInButton_{"Count-in"}, monitorButton_{"Monitor"};
-    juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"}, rateButton_{"48 kHz"}, tempoButton_{"120 BPM"}, loopButton_{"Loop"}, mixerButton_{"Mixer"}, exportButton_{"Export"}, stepsButton_{"Steps"};
+    juce::TextButton quantizeButton_{"Quantize"}, punchButton_{"Punch"}, timeSigButton_{"4/4"}, rateButton_{"48 kHz"}, tempoButton_{"120 BPM"}, loopButton_{"Loop"}, mixerButton_{"Mixer"}, exportButton_{"Export"}, stepsButton_{"Steps"}, samplerButton_{"Sampler"}, aiButton_{"AI"};
     juce::TextButton addTrackButton_{"+ Track"};
     juce::TextButton undoButton_{"Undo"}, redoButton_{"Redo"}, keysButton_{"Keys"};
     // File/device actions: toolbar on larger screens, "More" menu on phones.
@@ -150,6 +158,7 @@ private:
 #endif
     MixerView mixer_;
     StepSequencerView steps_;
+    SamplerView sampler_;
     // On-screen keyboard: plays armed instrument tracks exactly like a MIDI controller.
     // While it's open, the computer keyboard plays notes too ("musical typing").
     class TypingKeyboard : public juce::MidiKeyboardComponent {

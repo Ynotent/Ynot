@@ -2,6 +2,7 @@
 #pragma once
 
 #include "ynot/account.hpp"
+#include "ynot/analysis.hpp"
 #include "ynot/audio_device.hpp"
 #include "ynot/collab.hpp"
 #include "ynot/compatibility.hpp"
@@ -18,9 +19,10 @@
 #include "ynot/project_format.hpp"
 #include "ynot/quantize.hpp"
 #include "ynot/recorder.hpp"
+#include "ynot/sampler.hpp"
 #include "ynot/stretch.hpp"
 #include "ynot/ui_layout.hpp"
 
 namespace ynot {
-inline constexpr const char* kCoreVersion = "0.17.0";
+inline constexpr const char* kCoreVersion = "0.18.0";
 }

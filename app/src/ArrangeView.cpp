@@ -2,17 +2,20 @@
 
 #include <cmath>
 
+#include "AiPanel.h"
 #include "AudioImporter.h"
 #include "QuantizeMenus.h"
 #include "TunePanel.h"
 #include "ynot/edit.hpp"
 #include "ynot/drums.hpp"
 #include "ynot/stretch.hpp"
+#include "ynot/sampler.hpp"
 
 namespace ynotapp {
 
 namespace {
 constexpr int kRulerHeight = 30;
+constexpr int kChordRowHeight = 18;  // detected chords, above the bar numbers
 constexpr int kStackBelowWidth = 560;
 constexpr double kMinPixelsPerBeat = 8, kMaxPixelsPerBeat = 1200;
 double ticksToBeats(int64_t t) { return static_cast<double>(t) / ynot::kTicksPerQuarter; }
@@ -189,6 +192,28 @@ public:
         g.fillAll(th.surface);
         const auto& p = owner_.session_.project();
         auto& session = owner_.session_;
+        int rh = getHeight();  // height of the ruler proper (under the chord row)
+        // Detected chords (Ynot AI), in a row of their own along the top.
+        if (const auto& chords = session.shownChords(); !chords.empty()) {
+            g.setFont(juce::FontOptions(th.bodySize - 1.f, juce::Font::bold));
+            for (const auto& c : chords) {
+                if (c.name == "N") continue;
+                const float x0 = static_cast<float>(owner_.tickToX(c.tick));
+                const float x1 = static_cast<float>(owner_.tickToX(c.tick + c.lengthTick));
+                if (x1 < owner_.laneX0() || x0 > static_cast<float>(getWidth())) continue;
+                const float l = std::max(x0, static_cast<float>(owner_.laneX0()));
+                const juce::Rectangle<float> box(l + 1.f, 2.f, x1 - l - 2.f, static_cast<float>(kChordRowHeight - 4));
+                g.setColour(th.primary.withAlpha(0.25f));
+                g.fillRoundedRectangle(box, 3.f);
+                g.setColour(th.text);
+                g.drawText(juce::String(c.name), box.reduced(4.f, 0.f), juce::Justification::centredLeft, true);
+            }
+            g.setColour(th.textMuted);
+            g.setFont(juce::FontOptions(th.bodySize - 2.f));
+            g.drawText("Chords", owner_.laneX0() - 54, 2, 50, kChordRowHeight - 4, juce::Justification::right);
+            g.setOrigin(0, kChordRowHeight);
+            rh -= kChordRowHeight;
+        }
         // Punch range: red band along the bottom of the ruler (dim when punch is off).
         {
             const float x0 = static_cast<float>(owner_.tickToX(session.punchIn()));
@@ -196,7 +221,7 @@ public:
             if (x1 > owner_.laneX0()) {
                 const float l = std::max(x0, static_cast<float>(owner_.laneX0()));
                 g.setColour(th.record.withAlpha(session.punchEnabled() ? 0.85f : 0.25f));
-                g.fillRect(juce::Rectangle<float>(l, static_cast<float>(getHeight() - 7), x1 - l, 7.f));
+                g.fillRect(juce::Rectangle<float>(l, static_cast<float>(rh - 7), x1 - l, 7.f));
             }
         }
         // Loop: a band along the top of the ruler (dim when the loop is off).
@@ -221,7 +246,7 @@ public:
             const bool bar = b % beatsPerBar == 0;
             if (!bar && beatPx < 10) continue;
             g.setColour(bar ? th.textMuted : th.border);
-            g.drawVerticalLine(static_cast<int>(x), bar ? 4.f : 16.f, static_cast<float>(getHeight() - 8));
+            g.drawVerticalLine(static_cast<int>(x), bar ? 4.f : 16.f, static_cast<float>(rh - 8));
             if (bar && (b / beatsPerBar) % barStep == 0)
                 g.drawText(juce::String(b / beatsPerBar + 1), static_cast<int>(x) + 4, 2, 40, 14,
                            juce::Justification::left);
@@ -866,6 +891,17 @@ private:
                              takes);
             }
             m.addSubMenu("Time stretch", stretchMenu(c, *a));
+            m.addSeparator();
+            m.addSectionHeader("Ynot AI");
+            const auto toMidi = Session::aiAvailable(ynot::AiFeature::TranscribeAudioToMidi);
+            m.addItem(toMidi.available ? juce::String("Audio to MIDI (melody, bass or voice)")
+                                       : "Audio to MIDI (" + juce::String(toMidi.reason) + ")",
+                      toMidi.available, false, [this, c] { aiAudioToMidi(owner_.session_, c.trackId, c.clipId); });
+            m.addItem("Detect tempo of this clip", [this, c] { aiDetectTempo(owner_.session_, c.trackId, c.clipId); });
+            m.addItem("Send to Sampler (chop onto pads)", [this, c] {
+                const auto id = owner_.session_.sendClipToSampler(c.trackId, c.clipId);
+                if (!id.empty() && owner_.onOpenSampler) owner_.onOpenSampler(id);
+            });
         }
         m.addItem("Loop this clip", [this, c] {
             owner_.session_.setLoopRange(c.startTick, c.startTick + c.lengthTick);
@@ -1016,6 +1052,7 @@ void ArrangeView::scrollByPixels(double dx) {
 }
 
 void ArrangeView::refresh() {
+    if (ruler_->getHeight() != kRulerHeight + (session_.shownChords().empty() ? 0 : kChordRowHeight)) resized();
     // Drop waveform caches for media no longer in the project.
     for (auto it = peaks_.begin(); it != peaks_.end();)
         it = session_.project().findMedia(it->first) ? std::next(it) : peaks_.erase(it);
@@ -1040,7 +1077,7 @@ void ArrangeView::resized() {
     rowHeight_ = stacked_ ? target + 12 : std::max(target * 2 + 12, 72);
     laneHeight_ = stacked_ ? std::max(target + 16, 56) : rowHeight_;
     auto r = getLocalBounds();
-    ruler_->setBounds(r.removeFromTop(kRulerHeight));
+    ruler_->setBounds(r.removeFromTop(kRulerHeight + (session_.shownChords().empty() ? 0 : kChordRowHeight)));
     viewport_.setBounds(r);
     // Set twice: the first call may toggle the vertical scrollbar, changing the visible width.
     lanes_->setSize(viewport_.getMaximumVisibleWidth(), std::max(lanes_->contentHeight(), r.getHeight()));
@@ -1162,6 +1199,8 @@ void ArrangeView::showTrackMenu(const std::string& trackId, juce::Component* tar
     };
 
     if (track.kind == ynot::TrackKind::Instrument) {
+        if (track.instrument && track.instrument->uid == ynot::kBuiltinSampler)
+            m.addItem("Open Ynot Sampler...", [this, tid = track.id] { if (onOpenSampler) onOpenSampler(tid); });
         if (track.instrument)
             m.addSubMenu("Instrument: " + juce::String(track.instrument->name), pluginItems(*track.instrument, true));
         juce::PopupMenu choose;
@@ -1170,6 +1209,10 @@ void ArrangeView::showTrackMenu(const std::string& trackId, juce::Component* tar
         });
         choose.addItem("Ynot Drums (built-in drum kit)", [&session, tid = track.id] {
             session.edit([&](ynot::Project& p) { ynot::setInstrument(p, tid, ynot::makeBuiltin(ynot::kBuiltinDrums, "Ynot Drums")); });
+        });
+        choose.addItem("Ynot Sampler (built-in: chop a sample onto pads)", [this, &session, tid = track.id] {
+            session.edit([&](ynot::Project& p) { ynot::setInstrument(p, tid, ynot::makeBuiltin(ynot::kBuiltinSampler, "Ynot Sampler")); });
+            if (onOpenSampler) onOpenSampler(tid);
         });
         choose.addSeparator();
         auto installed = pluginBrowserMenu(host.availablePlugins(true), [&session, &host, tid = track.id](const juce::PluginDescription& d) {

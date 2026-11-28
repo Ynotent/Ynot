@@ -40,6 +40,8 @@ add_library(ynot_core STATIC
     core/src/midi_recorder.cpp
     core/src/quantize.cpp
     core/src/stretch.cpp
+    core/src/sampler.cpp
+    core/src/analysis.cpp
     core/src/drums.cpp
     core/src/pitch_correct.cpp
 )
@@ -89,6 +91,8 @@ if(YNOT_BUILD_TESTS)
         core/tests/test_midi.cpp
         core/tests/test_quantize.cpp
         core/tests/test_stretch.cpp
+        core/tests/test_sampler.cpp
+        core/tests/test_analysis.cpp
         core/tests/test_tempo.cpp
         core/tests/test_loop.cpp
         core/tests/test_mixer.cpp

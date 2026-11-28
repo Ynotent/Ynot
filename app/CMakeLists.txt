@@ -12,6 +12,8 @@ set(YNOT_APP_SOURCES
     src/JucePluginHost.cpp
     src/Session.cpp
     src/MidiControl.cpp
+    src/SamplerView.cpp
+    src/AiPanel.cpp
     src/MidiClock.cpp
     src/MainComponent.cpp
     src/ArrangeView.cpp

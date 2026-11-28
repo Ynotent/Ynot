@@ -218,6 +218,34 @@ public:
     std::vector<ynot::EngineIssue> engineIssues() const { return issues_; }
     std::vector<std::string> tracksToPrepareForMobile() const;
 
+    // ---- On-device AI (runs on a background thread; `done` is called on the message thread).
+    // Accounts/subscriptions aren't built yet (M8), so every tier-gated feature is unlocked;
+    // aiAvailability still decides whether the feature runs on this kind of device.
+    static ynot::AiAvailability aiAvailable(ynot::AiFeature f);
+    struct SongAnalysis {
+        ynot::KeyEstimate key;
+        std::vector<ynot::ChordSpan> chords;
+        juce::String error;
+    };
+    void analyzeSong(std::function<void(const SongAnalysis&)> done);
+    // Chords from the last analysis, drawn above the timeline (cleared when the song changes).
+    const std::vector<ynot::ChordSpan>& shownChords() const { return shownChords_; }
+    void setShownChords(std::vector<ynot::ChordSpan> c) { shownChords_ = std::move(c); if (onChange) onChange(); }
+    // Sets every Ynot Tune on the song to this key. Returns how many were changed.
+    int applyKeyToTune(const ynot::KeyEstimate& k);
+    void convertClipToMidi(const std::string& trackId, const std::string& clipId,
+                           std::function<void(const juce::String& error)> done);
+    void detectClipTempo(const std::string& trackId, const std::string& clipId,
+                         std::function<void(ynot::TempoEstimate)> done);
+
+    // ---- Ynot Sampler
+    // New sampler track from an audio file (decoded in the background). Returns via done(error, trackId).
+    void newSamplerFromFile(const juce::File& file, std::function<void(const juce::String&, const std::string&)> done);
+    void loadSampleFile(const std::string& trackId, const juce::File& file, std::function<void(const juce::String&)> done);
+    std::string sendClipToSampler(const std::string& trackId, const std::string& clipId);  // new track id
+    // Same as the file versions, synchronously (tests).
+    juce::String newSamplerFromFileNow(const juce::File& file, std::string& trackId);
+
     // Hardware controllers: MIDI Learn mappings, transport buttons (MMC) and MIDI clock out.
     MidiControlMap& midiControls() { return *midiControls_; }
     void setMidiClockOut(bool on);
@@ -274,6 +302,11 @@ private:
 
     static constexpr int kMaxLiveMidi = 512;
     juce::MidiMessageCollector collector_;
+    std::vector<ynot::ChordSpan> shownChords_;
+    // Background jobs hold this; it's cleared on destruction so late results are dropped.
+    std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
+    template <typename Work, typename Then>
+    void runInBackground(Work work, Then then);
     std::unique_ptr<MidiControlMap> midiControls_;
     MidiClockSender midiClock_;
     void applyMidiControl(const MidiMapping& map, int value);
