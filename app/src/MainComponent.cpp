@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "AudioImporter.h"
+#include "AudioIOPanel.h"
 #include "ExportPanel.h"
 #include "QuantizeMenus.h"
 
@@ -465,7 +466,7 @@ void MainComponent::showMoreMenu() {
     m.addSeparator();
     m.addItem("Prepare for iPhone & Android", !session_.tracksToPrepareForMobile().empty(), false,
               [this] { prepareForMobile(); });
-    m.addItem("Audio settings...", [this] { showAudioSettings(); });
+    m.addItem("Audio interface...", [this] { showAudioSettings(); });
     if (canScanPlugins()) {
         juce::PopupMenu pm;
         addPluginItems(pm);
@@ -695,6 +696,18 @@ void MainComponent::addSampleRateItems(juce::PopupMenu& m) {
             addRate(r);
     m.addSeparator();
     m.addItem("Saved with the project. Audio at other rates is converted on playback.", false, false, [] {});
+    juce::PopupMenu buffers;
+    for (int n : session_.availableBufferSizes())
+        buffers.addItem(AudioIOPanel::bufferLabel(n, session_.sampleRate()), !session_.isRecording(),
+                        n == session_.bufferSize(), [this, n] {
+                            const auto err = session_.setBufferSize(n);
+                            if (err.isNotEmpty())
+                                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                                                                       "Buffer size", err);
+                            refresh();
+                        });
+    m.addSubMenu("Buffer size (" + juce::String(session_.bufferSize()) + ")", buffers);
+    m.addItem("Audio interface...", [this] { showAudioSettings(); });
 }
 
 void MainComponent::showCompatibilityDialog() {
@@ -733,19 +746,7 @@ void MainComponent::toggleRecording() {
     refresh();
 }
 
-void MainComponent::showAudioSettings() {
-    // Lists every driver JUCE offers on this OS (CoreAudio, ASIO, WASAPI, iOS Audio, Oboe).
-    auto* selector = new juce::AudioDeviceSelectorComponent(session_.device().manager(), 0, 8, 2, 2, false, false,
-                                                            true, false);
-    selector->setSize(520, 420);
-    juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned(selector);
-    o.dialogTitle = "Audio Settings";
-    o.dialogBackgroundColour = theme_.surface;
-    o.useNativeTitleBar = true;
-    o.resizable = true;
-    o.launchAsync();
-}
+void MainComponent::showAudioSettings() { AudioIOPanel::show(session_, theme_); }
 
 void MainComponent::scanPlugins() {
     if (scanning_) return;

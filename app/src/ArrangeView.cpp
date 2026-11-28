@@ -31,7 +31,15 @@ public:
             if (session.isRecording()) return;  // arming changes are blocked mid-take
             session.edit([id = id_](ynot::Project& p) { if (auto* t = p.findTrack(id)) t->armed = !t->armed; });
         };
-        input_.onClick = [this, &session] { session.cycleInput(id_); };
+        input_.onClick = [this, &session] {
+            // Choose from the interface's inputs by name (mono channels, then stereo pairs).
+            juce::PopupMenu m;
+            const auto current = session.inputFor(id_);
+            for (const auto& c : session.inputChoices())
+                m.addItem(c.label, !session.isRecording(), c.channels == current,
+                          [&session, id = id_, ch = c.channels] { session.setInput(id, ch); });
+            m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(input_));
+        };
         mute_.onClick = [this, &session] {
             if (auto* t = session.project().findTrack(id_)) session.setTrackMute(id_, !t->mute);
         };

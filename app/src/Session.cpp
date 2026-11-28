@@ -17,7 +17,9 @@ Session::Session(JucePluginHost& host) : host_(host) {
     scratchL_.assign(kScratchFrames, 0.f);
     scratchR_.assign(kScratchFrames, 0.f);
     keyboardState_.addListener(&collector_);
-    device_.onDeviceChanged = [this] { deviceChanged(); };  // on-screen keyboard -> same path as hardware MIDI
+    device_.onDeviceChanged = [this] { deviceChanged(); };
+    if (auto json = juce::JSON::parse(ioSettingsFile()); json.isObject())
+        mainOutputPair_ = std::max(0, static_cast<int>(json.getProperty("mainOutputPair", 0)));  // on-screen keyboard -> same path as hardware MIDI
 }
 
 Session::~Session() {
@@ -243,6 +245,8 @@ bool Session::startAudio(const std::string& deviceId) {
         audioCallback(ins, numIns, outs, numOuts, n);
     });
     if (!ok) return false;
+    // Use every input and output of an audio interface, not just the first pair.
+    if (!cfg.inputChannels.empty()) device_.enableAllChannels();
     sampleRate_ = device_.currentSampleRate();
     blockSize_ = std::max(device_.currentBufferSize(), 64);
     collector_.reset(sampleRate_);
@@ -358,11 +362,95 @@ void Session::cycleInput(const std::string& trackId) {
     else if (onChange) onChange();
 }
 
+std::string Session::inputChannelName(int channel) const {
+    const auto names = device_.inputChannelNames();
+    if (channel >= 0 && channel < names.size()) return names[channel].toStdString();
+    return {};
+}
+
 std::string Session::inputLabel(const std::string& trackId) const {
     auto ch = inputFor(trackId);
     std::string s = "In " + std::to_string(ch[0] + 1);
     if (ch.size() > 1) s += "+" + std::to_string(ch[1] + 1);
     return s;
+}
+
+std::vector<Session::InputChoice> Session::inputChoices() const {
+    std::vector<InputChoice> out;
+    const int n = std::max(1, numInputChannels());
+    auto named = [this](int c) {
+        const juce::String name(inputChannelName(c));
+        // Drivers often name channels just "Input 3"; only show names that add something.
+        const bool generic = name.isEmpty() || (name.containsIgnoreCase("input") && name.length() <= 9);
+        return generic ? std::string() : " (" + name.toStdString() + ")";
+    };
+    for (int c = 0; c < n; ++c) out.push_back({{c}, "In " + std::to_string(c + 1) + named(c)});
+    for (int c = 0; c + 1 < n; c += 2)
+        out.push_back({{c, c + 1}, "In " + std::to_string(c + 1) + "+" + std::to_string(c + 2) + " (stereo)"});
+    return out;
+}
+
+void Session::setInput(const std::string& trackId, const std::vector<int>& channels) {
+    if (channels.empty() || recording_) return;
+    inputs_[trackId] = channels;
+    if (monitoring_.load()) rebuild();
+    else if (onChange) onChange();
+}
+
+float Session::takeInputPeak(int channel) {
+    if (channel < 0 || channel >= kMaxMeteredInputs) return 0.f;
+    return inputPeaks_[channel].exchange(0.f);
+}
+
+juce::File Session::ioSettingsFile() const {
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Ynot")
+        .getChildFile("io-settings.json");
+}
+
+int Session::numOutputPairs() const {
+    if (device_.manager().getCurrentAudioDevice() == nullptr) return std::max(1, simulatedOutputs_ / 2);
+    return std::max(1, (device_.outputChannelNames().size() + 1) / 2);
+}
+
+void Session::setMainOutputPair(int pair) {
+    mainOutputPair_ = std::clamp(pair, 0, std::max(0, numOutputPairs() - 1));
+    auto* obj = new juce::DynamicObject();
+    obj->setProperty("mainOutputPair", mainOutputPair_.load());
+    ioSettingsFile().getParentDirectory().createDirectory();
+    ioSettingsFile().replaceWithText(juce::JSON::toString(juce::var(obj)));
+    if (onChange) onChange();
+}
+
+std::string Session::outputPairName(int pair) const {
+    const auto names = device_.outputChannelNames();
+    std::string s = "Out " + std::to_string(pair * 2 + 1) + "+" + std::to_string(pair * 2 + 2);
+    if (pair * 2 + 1 < names.size()) {
+        const auto a = names[pair * 2], b = names[pair * 2 + 1];
+        const bool generic = a.containsIgnoreCase("output") && a.length() <= 10;
+        if (!generic) s += " (" + a.toStdString() + " / " + b.toStdString() + ")";
+    }
+    return s;
+}
+
+std::vector<int> Session::availableBufferSizes() const {
+    if (device_.manager().getCurrentAudioDevice() != nullptr) return device_.availableBufferSizes();
+    return {32, 64, 128, 256, 512, 1024, 2048};  // no hardware (tests, simulation)
+}
+
+juce::String Session::setBufferSize(int frames) {
+    const auto sizes = availableBufferSizes();
+    if (std::find(sizes.begin(), sizes.end(), frames) == sizes.end())
+        return "A buffer of " + juce::String(frames) + " samples isn't available on this audio device.";
+    if (recording_) return "Stop recording before changing the buffer size.";
+    if (device_.manager().getCurrentAudioDevice() != nullptr) {
+        auto err = device_.setBufferSize(frames);
+        if (err.isNotEmpty()) return err;
+        deviceChanged();
+    } else {
+        applyDeviceFormat(sampleRate_, frames);
+    }
+    return {};
 }
 
 bool Session::startRecording(std::string& error) {
@@ -695,9 +783,18 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
     if (engine && recordingAudio_.load()) recorder_.capture(ins, numIns, frames, clock);
     if (engine && recordingMidi_.load()) midiRecorder_.capture(liveMidi_.data(), numLive, clock);
     if (capturing) recordClock_ = clock + frames;
+    for (int c = 0; c < std::min(numIns, kMaxMeteredInputs); ++c)
+        if (ins[c]) {
+            const float pk = juce::FloatVectorOperations::findMaximum(ins[c], frames);
+            const float pk2 = -juce::FloatVectorOperations::findMinimum(ins[c], frames);
+            const float v = std::max(pk, pk2);
+            if (v > inputPeaks_[c].load(std::memory_order_relaxed)) inputPeaks_[c].store(v, std::memory_order_relaxed);
+        }
     if (numOuts < 2) frames = std::min(frames, kScratchFrames);
-    float* l = numOuts > 0 ? outs[0] : scratchL_.data();
-    float* r = numOuts > 1 ? outs[1] : scratchR_.data();
+    // The song goes to the chosen output pair; every other output stays silent.
+    const int base = numOuts >= 2 ? std::min(mainOutputPair_.load(std::memory_order_relaxed) * 2, numOuts - 2) : 0;
+    float* l = numOuts > 0 ? outs[base] : scratchL_.data();
+    float* r = numOuts > 1 ? outs[base + 1] : scratchR_.data();
     const bool running = playing_.load();
     if (engine && (running || monitoring_.load() || liveMidiActive_.load())) {
         // Drivers may deliver blocks larger than requested; render in chunks.
@@ -722,7 +819,8 @@ void Session::audioCallback(const float* const* ins, int numIns, float* const* o
         juce::FloatVectorOperations::clear(l, frames);
         juce::FloatVectorOperations::clear(r, frames);
     }
-    for (int c = 2; c < numOuts; ++c) juce::FloatVectorOperations::clear(outs[c], frames);
+    for (int c = 0; c < numOuts; ++c)
+        if (c != base && c != base + 1) juce::FloatVectorOperations::clear(outs[c], frames);
     inCallback_ = false;
 }
 

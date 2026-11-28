@@ -47,6 +47,14 @@ public:
     // Switch the open device to `rate`. Returns an error message, or empty on success.
     juce::String setSampleRate(double rate);
     static juce::String rateLabel(double rate);  // 44100 -> "44.1 kHz"
+    // Buffer sizes (frames) the open device offers, and switching to one.
+    std::vector<int> availableBufferSizes() const;
+    juce::String setBufferSize(int frames);
+    // Opens every input and output the device has (an audio interface's inputs 3, 4, ... and
+    // outputs 3-4, 5-6 ... are then usable). Returns an error, or empty.
+    juce::String enableAllChannels();
+    juce::StringArray inputChannelNames() const;   // of the open device, in order
+    juce::StringArray outputChannelNames() const;
     // Called on the message thread after any change to the device (from Ynot or the
     // Audio settings window): new device, rate, buffer size or channels.
     std::function<void()> onDeviceChanged;

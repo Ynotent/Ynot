@@ -86,6 +86,68 @@ juce::String JuceAudioDevice::rateLabel(double rate) {
     return juce::String(k, std::abs(k - std::round(k)) < 1e-6 ? 0 : 1) + " kHz";  // "48 kHz", "44.1 kHz"
 }
 
+std::vector<int> JuceAudioDevice::availableBufferSizes() const {
+    std::vector<int> out;
+    if (auto* d = manager_.getCurrentAudioDevice())
+        for (int n : d->getAvailableBufferSizes()) out.push_back(n);
+    return out;
+}
+
+juce::String JuceAudioDevice::setBufferSize(int frames) {
+    auto* d = manager_.getCurrentAudioDevice();
+    if (d == nullptr) return "No audio device is open.";
+    const auto name = d->getName();
+    if (!d->getAvailableBufferSizes().contains(frames))
+        return name + " doesn't offer a buffer of " + juce::String(frames) + " samples.";
+    auto setup = manager_.getAudioDeviceSetup();
+    if (setup.bufferSize == frames) return {};
+    setup.bufferSize = frames;
+    auto err = manager_.setAudioDeviceSetup(setup, true);
+    if (err.isEmpty() && currentBufferSize() != frames)
+        err = name + " stayed at " + juce::String(currentBufferSize()) + " samples.";
+    return err;
+}
+
+juce::String JuceAudioDevice::enableAllChannels() {
+    auto* d = manager_.getCurrentAudioDevice();
+    if (d == nullptr) return "No audio device is open.";
+    const int ins = d->getInputChannelNames().size(), outs = d->getOutputChannelNames().size();
+    auto setup = manager_.getAudioDeviceSetup();
+    juce::BigInteger wantIn, wantOut;
+    wantIn.setRange(0, ins, true);
+    wantOut.setRange(0, outs, true);
+    if (setup.inputChannels == wantIn && setup.outputChannels == wantOut && !setup.useDefaultInputChannels &&
+        !setup.useDefaultOutputChannels)
+        return {};
+    setup.useDefaultInputChannels = setup.useDefaultOutputChannels = false;
+    setup.inputChannels = wantIn;
+    setup.outputChannels = wantOut;
+    return manager_.setAudioDeviceSetup(setup, true);
+}
+
+juce::StringArray JuceAudioDevice::inputChannelNames() const {
+    if (auto* d = manager_.getCurrentAudioDevice()) {
+        // Only the active channels reach the callback, in order: name exactly those.
+        juce::StringArray all = d->getInputChannelNames(), active;
+        const auto bits = d->getActiveInputChannels();
+        for (int i = 0; i < all.size(); ++i)
+            if (bits[i]) active.add(all[i]);
+        return active;
+    }
+    return {};
+}
+
+juce::StringArray JuceAudioDevice::outputChannelNames() const {
+    if (auto* d = manager_.getCurrentAudioDevice()) {
+        juce::StringArray all = d->getOutputChannelNames(), active;
+        const auto bits = d->getActiveOutputChannels();
+        for (int i = 0; i < all.size(); ++i)
+            if (bits[i]) active.add(all[i]);
+        return active;
+    }
+    return {};
+}
+
 std::vector<double> JuceAudioDevice::availableSampleRates() const {
     std::vector<double> out;
     if (auto* d = manager_.getCurrentAudioDevice())

@@ -17,7 +17,8 @@ set(YNOT_APP_SOURCES
     src/PluginSandbox.cpp
     src/AudioImporter.cpp
     src/AudioExporter.cpp
-    src/ExportPanel.cpp)
+    src/ExportPanel.cpp
+    src/AudioIOPanel.cpp)
 
 juce_add_gui_app(YnotApp
     PRODUCT_NAME "Ynot"

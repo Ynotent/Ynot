@@ -143,6 +143,27 @@ public:
     int64_t punchIn() const { return punchIn_; }
     int64_t punchOut() const { return punchOut_; }
     int numInputChannels() const;
+    // Inputs a track can record from: each channel alone, then stereo pairs, labelled with the
+    // interface's own channel names ("In 3 (Guitar DI)").
+    struct InputChoice {
+        std::vector<int> channels;
+        std::string label;
+    };
+    std::vector<InputChoice> inputChoices() const;
+    void setInput(const std::string& trackId, const std::vector<int>& channels);
+    std::string inputChannelName(int channel) const;
+    float takeInputPeak(int channel);  // live input level since the last call (any track)
+
+    // Outputs: the song plays through one stereo pair of the interface (device-local setting).
+    int numOutputPairs() const;
+    int mainOutputPair() const { return mainOutputPair_.load(); }
+    void setMainOutputPair(int pair);
+    std::string outputPairName(int pair) const;
+
+    // Buffer size (latency vs. CPU safety). Device-local, remembered with the device.
+    int bufferSize() const { return blockSize_; }
+    std::vector<int> availableBufferSizes() const;
+    juce::String setBufferSize(int frames);  // error message, or empty
     std::vector<int> inputFor(const std::string& trackId) const;
     void cycleInput(const std::string& trackId);
     std::string inputLabel(const std::string& trackId) const;
@@ -165,6 +186,7 @@ public:
     // Device-free operation for smoke tests and CI: declare simulated inputs,
     // then run audio callbacks directly.
     void simulateInputsForTesting(int numInputs) { simulatedInputs_ = numInputs; }
+    void simulateOutputsForTesting(int numOutputs) { simulatedOutputs_ = numOutputs; }
     void processForTesting(const float* const* ins, int numIns, float* const* outs, int numOuts, int frames);
 
     // Compatibility for a target platform, using what's installed *here* for this device.
@@ -238,7 +260,11 @@ private:
     int64_t punchOut_ = ynot::kTicksPerQuarter * 8;  // bar 3
     static constexpr int64_t kNoSeek = std::numeric_limits<int64_t>::min();
     std::atomic<int64_t> pendingSeek_{kNoSeek};
-    int simulatedInputs_ = 0;
+    int simulatedInputs_ = 0, simulatedOutputs_ = 2;
+    static constexpr int kMaxMeteredInputs = 64;
+    std::atomic<float> inputPeaks_[kMaxMeteredInputs] = {};
+    std::atomic<int> mainOutputPair_{0};
+    juce::File ioSettingsFile() const;
     int stretchJobs_ = 0;
     ynot::StretchMode defaultStretchMode_ = ynot::StretchMode::Poly;
 };

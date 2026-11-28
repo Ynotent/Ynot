@@ -392,6 +392,46 @@ static int runSmokeTest(const juce::File& dir) {
                "reset returns the clip to its original audio and length");
     }
 
+    {   // Audio interface: inputs by channel, input meters, main output pair, buffer size.
+        session.simulateInputsForTesting(4);
+        session.simulateOutputsForTesting(4);
+        const auto choices = session.inputChoices();
+        expect(choices.size() == 6 && choices[2].label == "In 3" && choices[4].channels == std::vector<int>{0, 1} &&
+                   choices[5].label == "In 3+4 (stereo)",
+               "every interface input is offered, alone and as stereo pairs");
+        session.setInput(vocalsId, {2});
+        expect(session.inputFor(vocalsId) == std::vector<int>{2}, "a track's input can be chosen directly");
+        const int block = 256;
+        std::vector<float> quiet(block), loud(block, 0.5f), o0(block), o1(block), o2(block), o3(block);
+        const float* ins[4] = {quiet.data(), quiet.data(), loud.data(), quiet.data()};
+        float* outs[4] = {o0.data(), o1.data(), o2.data(), o3.data()};
+        for (int c = 0; c < 4; ++c) session.takeInputPeak(c);
+        session.processForTesting(ins, 4, outs, 4, block);
+        expect(std::abs(session.takeInputPeak(2) - 0.5f) < 1e-6f && session.takeInputPeak(0) <= 0.f,
+               "each input has its own level meter");
+        session.setMainOutputPair(1);
+        session.seekToTick(0);
+        session.play();
+        float pair0 = 0, pair1 = 0;
+        for (int b = 0; b < 100; ++b) {
+            session.processForTesting(ins, 4, outs, 4, block);
+            for (int i = 0; i < block; ++i) {
+                pair0 = std::max(pair0, std::abs(o0[static_cast<size_t>(i)]) + std::abs(o1[static_cast<size_t>(i)]));
+                pair1 = std::max(pair1, std::abs(o2[static_cast<size_t>(i)]) + std::abs(o3[static_cast<size_t>(i)]));
+            }
+        }
+        session.stop();
+        expect(pair1 > 0.01f && pair0 <= 0.f, "the song plays through the chosen output pair (Out 3+4) only");
+        session.setMainOutputPair(0);
+        auto err = session.setBufferSize(128);
+        expect(err.isEmpty() && session.bufferSize() == 128 && session.setBufferSize(100).isNotEmpty(),
+               "buffer size can be changed; unsupported sizes are refused");
+        session.setBufferSize(512);
+        session.setInput(vocalsId, {0});
+        session.simulateInputsForTesting(2);
+        session.simulateOutputsForTesting(2);
+    }
+
     {   // Mixer: a fader drag changes the level at once and is one undo step; meters follow.
         std::string keysId;
         for (auto& t : session.project().tracks)
