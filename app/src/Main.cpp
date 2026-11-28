@@ -485,6 +485,8 @@ static int runSmokeTest(const juce::File& dir) {
         bool stayedInLoop = true;
         for (int b = 0; b < 5 * 48000 / block; ++b) {  // 5 s = 2.5 passes of a 2 s bar
             session.processForTesting(ins, 2, outs, 2, block);
+            // Give the disk-writer thread time, as real-time audio would (the test runs far faster).
+            if (b % 4 == 0) juce::Thread::sleep(1);
             const int64_t t = session.positionTick();
             stayedInLoop &= t >= bar && t <= 2 * bar;
         }
@@ -492,9 +494,16 @@ static int runSmokeTest(const juce::File& dir) {
         const ynot::AudioClip* take = nullptr;
         for (auto& c : session.project().findTrack(vocalsId)->audioClips)
             if (!res.newClips.empty() && c.id == res.newClips[0]) take = &c;
+        std::cout << "  info cycle take: " << (take ? "clip at " + std::to_string(take->startTick) + " len " +
+                                                          std::to_string(take->lengthTick) + " takes " +
+                                                          std::to_string(take->takeOffsets.size()) + " active " +
+                                                          std::to_string(take->activeTake)
+                                                    : std::string("none"))
+                  << ", " << res.newClips.size() << " new clip(s), dropped " << res.droppedFrames << " frames"
+                  << std::endl;
         expect(started && stayedInLoop, "with the loop on, recording plays the loop over and over");
-        expect(take && take->startTick == bar && take->lengthTick == bar && take->takeOffsets.size() == 3 &&
-                   take->activeTake == 1,
+        expect(take && res.droppedFrames == 0 && take->startTick == bar && take->lengthTick == bar &&
+                   take->takeOffsets.size() == 3 && take->activeTake == 1,
                "cycle recording keeps each pass as a take; the last complete pass plays");
         if (take) {
             const auto id = take->id;
