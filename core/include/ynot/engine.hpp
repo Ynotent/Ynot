@@ -82,6 +82,8 @@ private:
     std::map<std::string, AudioBuffer> cache_;
 };
 
+double dbToGain(double db);
+
 struct EngineIssue {
     std::string trackId;
     std::string message;
@@ -130,6 +132,16 @@ public:
     void setForcedClickUntil(int64_t frame) { clickUntil_.store(frame); }
     const std::vector<EngineIssue>& issues() const { return issues_; }
 
+    // Mixer (safe to call from another thread while audio runs; no rebuild needed).
+    int numTracks() const { return static_cast<int>(tracks_.size()); }
+    const std::string& trackId(int index) const;
+    int trackIndex(const std::string& trackId) const;  // -1 if not in this engine
+    void setTrackMix(int index, double gainDb, double pan, bool muted);
+    void setMasterGain(double gainDb) { masterGain_.store(static_cast<float>(dbToGain(gainDb))); }
+    // Meters: highest absolute sample (post-fader) since the last call, then reset.
+    // index -1 = the master output.
+    float takePeak(int index, int channel);
+
 private:
     struct TrackState;
     std::vector<std::unique_ptr<TrackState>> tracks_;
@@ -151,6 +163,8 @@ private:
     std::atomic<int64_t> loopStart_{0}, loopEnd_{0};
     std::atomic<bool> loopOn_{false};
     std::vector<MidiEvent> liveScratch_;
+    std::atomic<float> masterGain_{1.f};
+    std::atomic<float> masterPeak_[2] = {{0.f}, {0.f}};
 };
 
 // Offline helpers built on Engine.
@@ -159,7 +173,5 @@ AudioBuffer renderProject(const Project& p, MediaProvider& media, PluginHost& ho
                           std::vector<EngineIssue>* issues = nullptr);
 AudioBuffer renderTrackPreFader(const Project& p, const std::string& trackId, MediaProvider& media,
                                 PluginHost& host, double sampleRate, double tailSeconds = 1.0);
-
-double dbToGain(double db);
 
 }  // namespace ynot

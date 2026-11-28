@@ -111,6 +111,18 @@ public:
     // Time signature (stored in the project; undoable).
     void setTimeSignature(int numerator, int denominator);
 
+    // Mixer: volume, pan, mute and solo change the sound immediately (no engine rebuild).
+    // Call beginMixChange() once at the start of a fader/knob drag so the drag is one undo step;
+    // mute/solo record their own undo step.
+    void beginMixChange();
+    void setTrackGain(const std::string& trackId, double gainDb);
+    void setTrackPan(const std::string& trackId, double pan);
+    void setTrackMute(const std::string& trackId, bool on);
+    void setTrackSolo(const std::string& trackId, bool on);
+    void setMasterGain(double gainDb);
+    struct Meter { float left = 0, right = 0; };
+    Meter takeMeter(const std::string& trackId);  // empty id = master; peak since the last call
+
     // Loop (cycle): playback repeats the loop; recording records a take per pass (audio) or
     // merges every pass (MIDI). Stored in the project. Takes effect immediately, no rebuild.
     void setLoopRange(int64_t startTick, int64_t endTick);
@@ -210,6 +222,7 @@ private:
     std::atomic<int64_t> recordClock_{0};
     bool cycleActive_ = false;  // this recording is a cycle recording
     void applyLoopToEngine(ynot::Engine& e) const;
+    void pushMixToEngine();
     int64_t recordEnd_ = std::numeric_limits<int64_t>::max();
     const ynot::QuantizeSettings* recordQuantize();
     std::string recordQuantizeId_;

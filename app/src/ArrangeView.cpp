@@ -33,10 +33,10 @@ public:
         };
         input_.onClick = [this, &session] { session.cycleInput(id_); };
         mute_.onClick = [this, &session] {
-            session.edit([id = id_](ynot::Project& p) { if (auto* t = p.findTrack(id)) t->mute = !t->mute; });
+            if (auto* t = session.project().findTrack(id_)) session.setTrackMute(id_, !t->mute);
         };
         solo_.onClick = [this, &session] {
-            session.edit([id = id_](ynot::Project& p) { if (auto* t = p.findTrack(id)) t->solo = !t->solo; });
+            if (auto* t = session.project().findTrack(id_)) session.setTrackSolo(id_, !t->solo);
         };
         freeze_.onClick = [this, &session] {
             const auto* t = session.project().findTrack(id_);

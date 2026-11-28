@@ -89,6 +89,7 @@ if(YNOT_BUILD_TESTS)
         core/tests/test_stretch.cpp
         core/tests/test_tempo.cpp
         core/tests/test_loop.cpp
+        core/tests/test_mixer.cpp
     )
     target_link_libraries(ynot_core_tests PRIVATE ynot_core)
     add_test(NAME ynot_core_tests COMMAND ynot_core_tests)

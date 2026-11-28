@@ -12,7 +12,7 @@ namespace {
 // Keys this version understands, per object kind. Anything else is preserved
 // verbatim in `extras` and written back on save.
 const std::vector<std::string> kProjectKeys = {
-    "format", "formatVersion", "id", "name", "tempoBpm", "tempoChanges", "loop", "timeSignature",
+    "format", "formatVersion", "id", "name", "tempoBpm", "tempoChanges", "loop", "masterGainDb", "timeSignature",
     "sampleRateHint", "tracks", "media"};
 const std::vector<std::string> kTrackKeys = {
     "id", "name", "kind", "order", "gainDb", "pan", "mute", "solo", "armed", "color",
@@ -285,6 +285,7 @@ Json projectToJson(const Project& p) {
     j["id"] = p.id;
     j["name"] = p.name;
     j["tempoBpm"] = p.tempoBpm;
+    if (p.masterGainDb != 0.0) j["masterGainDb"] = p.masterGainDb;
     if (p.loop.valid()) {
         Json lp = Json::object();
         lp["startTick"] = p.loop.startTick;
@@ -326,6 +327,7 @@ Project projectFromJson(const Json& input) {
     p.name = j.getString("name", "Untitled");
     p.tempoBpm = j.getNumber("tempoBpm", 120);
     if (p.tempoBpm < 10 || p.tempoBpm > 999) p.tempoBpm = 120;
+    p.masterGainDb = std::clamp(j.getNumber("masterGainDb", 0.0), -96.0, 12.0);
     if (auto* lp = j.find("loop"); lp && lp->isObject()) {
         p.loop.startTick = std::max<int64_t>(0, lp->getInt("startTick", 0));
         p.loop.endTick = lp->getInt("endTick", 0);

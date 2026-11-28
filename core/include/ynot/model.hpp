@@ -145,6 +145,7 @@ struct Project {
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
     double sampleRateHint = 48000;  // last-used device rate; informative only
+    double masterGainDb = 0.0;      // master fader
     std::vector<Track> tracks;
     std::vector<MediaRef> media;
     Json extras = Json::object();

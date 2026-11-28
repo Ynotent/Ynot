@@ -161,8 +161,10 @@ const AudioBuffer* PackageMediaProvider::get(const MediaRef& m) {
 
 struct Engine::TrackState {
     std::string id;
-    bool muted = false;
-    double gain = 1.0, pan = 0.0;
+    // Live mix: written by the mixer (any thread), read by the audio thread.
+    std::atomic<bool> muted{false};
+    std::atomic<double> gain{1.0}, pan{0.0};
+    std::atomic<float> peak[2] = {{0.f}, {0.f}};
     const AutomationLane* gainLane = nullptr;  // points into `track` copy below
     const AutomationLane* panLane = nullptr;
     Track track;  // snapshot
@@ -196,6 +198,7 @@ void Engine::prepare(const Project& project, MediaProvider& media, PluginHost& h
     tracks_.clear();
     issues_.clear();
     tempo_ = TempoMap(project);
+    masterGain_.store(opts.isolateTrackPreFader.empty() ? static_cast<float>(dbToGain(project.masterGainDb)) : 1.f);
     beatsPerBar_ = std::max(1, project.timeSigNumerator);
     beatTicks_ = project.beatTicks();
     clickRemaining_ = 0;
@@ -333,6 +336,29 @@ void Engine::seek(int64_t frame) {
     }
 }
 
+const std::string& Engine::trackId(int index) const { return tracks_[static_cast<size_t>(index)]->id; }
+
+int Engine::trackIndex(const std::string& id) const {
+    for (size_t i = 0; i < tracks_.size(); ++i)
+        if (tracks_[i]->id == id) return static_cast<int>(i);
+    return -1;
+}
+
+void Engine::setTrackMix(int index, double gainDb, double pan, bool muted) {
+    if (index < 0 || index >= numTracks()) return;
+    auto& ts = *tracks_[static_cast<size_t>(index)];
+    ts.gain.store(dbToGain(gainDb));
+    ts.pan.store(std::clamp(pan, -1.0, 1.0));
+    ts.muted.store(muted);
+}
+
+float Engine::takePeak(int index, int channel) {
+    channel = std::clamp(channel, 0, 1);
+    if (index < 0) return masterPeak_[channel].exchange(0.f);
+    if (index >= numTracks()) return 0.f;
+    return tracks_[static_cast<size_t>(index)]->peak[channel].exchange(0.f);
+}
+
 void Engine::setLoop(int64_t startTick, int64_t endTick, bool enabled) {
     const double sr = opts_.sampleRate;
     const int64_t s = tempo_.tickToFrame(std::max<int64_t>(0, startTick), sr);
@@ -463,20 +489,40 @@ void Engine::processSegment(float* left, float* right, int frames, const float* 
         }
         for (auto& p : ts.inserts) p->process(l, r, frames, nullptr, 0);
 
-        if (ts.muted) continue;
+        if (ts.muted.load(std::memory_order_relaxed)) continue;
+        const double faderGain = ts.gain.load(std::memory_order_relaxed);
+        const double faderPan = ts.pan.load(std::memory_order_relaxed);
         double gainDb0 = ts.gainLane ? ts.gainLane->valueAt(blockTick, ts.track.gainDb) : 0;
-        double gain = ts.gainLane ? dbToGain(gainDb0) : ts.gain;
-        double pan = ts.panLane ? ts.panLane->valueAt(blockTick, ts.pan) : ts.pan;
+        double gain = ts.gainLane ? dbToGain(gainDb0) : faderGain;
+        double pan = ts.panLane ? ts.panLane->valueAt(blockTick, faderPan) : faderPan;
         pan = std::clamp(pan, -1.0, 1.0);
         // Constant-power pan law (-3 dB centre).
         double angle = (pan + 1.0) * kPi / 4.0;
         auto gl = static_cast<float>(gain * std::cos(angle) * std::sqrt(2.0));
         auto gr = static_cast<float>(gain * std::sin(angle) * std::sqrt(2.0));
         if (!opts_.isolateTrackPreFader.empty()) gl = gr = 1.0f;
+        float pl = 0, pr = 0;
         for (int i = 0; i < frames; ++i) {
-            left[i] += l[i] * gl;
-            right[i] += r[i] * gr;
+            const float a = l[i] * gl, b = r[i] * gr;
+            left[i] += a;
+            right[i] += b;
+            pl = std::max(pl, std::abs(a));
+            pr = std::max(pr, std::abs(b));
         }
+        if (pl > ts.peak[0].load(std::memory_order_relaxed)) ts.peak[0].store(pl, std::memory_order_relaxed);
+        if (pr > ts.peak[1].load(std::memory_order_relaxed)) ts.peak[1].store(pr, std::memory_order_relaxed);
+    }
+    if (opts_.isolateTrackPreFader.empty()) {
+        const float mg = masterGain_.load(std::memory_order_relaxed);
+        float pl = 0, pr = 0;
+        for (int i = 0; i < frames; ++i) {
+            left[i] *= mg;
+            right[i] *= mg;
+            pl = std::max(pl, std::abs(left[i]));
+            pr = std::max(pr, std::abs(right[i]));
+        }
+        if (pl > masterPeak_[0].load(std::memory_order_relaxed)) masterPeak_[0].store(pl, std::memory_order_relaxed);
+        if (pr > masterPeak_[1].load(std::memory_order_relaxed)) masterPeak_[1].store(pr, std::memory_order_relaxed);
     }
     if (transportRunning) {
         const int64_t forcedUntil = clickUntil_.load(std::memory_order_relaxed);

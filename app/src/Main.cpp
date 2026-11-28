@@ -392,6 +392,41 @@ static int runSmokeTest(const juce::File& dir) {
                "reset returns the clip to its original audio and length");
     }
 
+    {   // Mixer: a fader drag changes the level at once and is one undo step; meters follow.
+        std::string keysId;
+        for (auto& t : session.project().tracks)
+            if (t.name == "Keys") keysId = t.id;
+        session.edit([&](ynot::Project& p) {
+            for (auto& t : p.tracks) t.armed = false;
+        });
+        session.seekToTick(0);
+        session.play();
+        std::vector<float> silence(512), outL(512), outR(512);
+        const float* ins[2] = {silence.data(), silence.data()};
+        float* outs[2] = {outL.data(), outR.data()};
+        auto run = [&] {
+            for (int b = 0; b < 40; ++b) session.processForTesting(ins, 2, outs, 2, 512);
+            return session.takeMeter(keysId);
+        };
+        session.takeMeter(keysId);
+        const auto before = run();
+        session.beginMixChange();
+        for (double db = -1; db >= -20; db -= 1) session.setTrackGain(keysId, db);  // a drag
+        const auto after = run();
+        session.setTrackMute(keysId, true);
+        const auto muted = run();
+        const auto master = session.takeMeter({});
+        expect(before.left > 0.01f && after.left < before.left * 0.2f && muted.left <= 0.f,
+               "mixer fader and mute change the level immediately; meters follow");
+        session.undo();  // the mute
+        session.undo();  // the whole drag
+        expect(std::abs(session.project().findTrack(keysId)->gainDb) < 1e-9 && !session.project().findTrack(keysId)->mute,
+               "a fader drag is one undo step");
+        expect(master.left >= 0.f, "the master meter reads");
+        session.stop();
+        session.seekToTick(0);
+    }
+
     {   // Loop + cycle recording: 2.5 passes over bar 2 -> one clip with 3 takes, last full pass active.
         const int64_t bar = session.project().barTicks();
         session.edit([&](ynot::Project& p) {

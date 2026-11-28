@@ -13,6 +13,7 @@ set(YNOT_APP_SOURCES
     src/Session.cpp
     src/MainComponent.cpp
     src/ArrangeView.cpp
+    src/MixerView.cpp
     src/PluginSandbox.cpp
     src/AudioImporter.cpp)
 

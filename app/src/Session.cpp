@@ -80,6 +80,57 @@ bool Session::redo() {
     return true;
 }
 
+void Session::pushMixToEngine() {
+    auto* e = active_.load();
+    if (!e) return;
+    bool anySolo = false;
+    for (const auto& t : project_.tracks) anySolo |= t.solo;
+    for (const auto& t : project_.tracks)
+        e->setTrackMix(e->trackIndex(t.id), t.gainDb, t.pan, t.mute || (anySolo && !t.solo));
+    e->setMasterGain(project_.masterGainDb);
+}
+
+void Session::beginMixChange() {
+    if (loaded_) history_.record(project_);
+}
+
+void Session::setTrackGain(const std::string& id, double gainDb) {
+    if (auto* t = project_.findTrack(id)) t->gainDb = std::clamp(gainDb, -96.0, 12.0);
+    pushMixToEngine();
+}
+
+void Session::setTrackPan(const std::string& id, double pan) {
+    if (auto* t = project_.findTrack(id)) t->pan = std::clamp(pan, -1.0, 1.0);
+    pushMixToEngine();
+}
+
+void Session::setTrackMute(const std::string& id, bool on) {
+    beginMixChange();
+    if (auto* t = project_.findTrack(id)) t->mute = on;
+    pushMixToEngine();
+    if (onChange) onChange();
+}
+
+void Session::setTrackSolo(const std::string& id, bool on) {
+    beginMixChange();
+    if (auto* t = project_.findTrack(id)) t->solo = on;
+    pushMixToEngine();
+    if (onChange) onChange();
+}
+
+void Session::setMasterGain(double gainDb) {
+    project_.masterGainDb = std::clamp(gainDb, -96.0, 12.0);
+    pushMixToEngine();
+}
+
+Session::Meter Session::takeMeter(const std::string& trackId) {
+    auto* e = active_.load();
+    if (!e) return {};
+    const int i = trackId.empty() ? -1 : e->trackIndex(trackId);
+    if (!trackId.empty() && i < 0) return {};
+    return {e->takePeak(i, 0), e->takePeak(i, 1)};
+}
+
 void Session::applyLoopToEngine(ynot::Engine& e) const {
     // Punch recording records a fixed range, so the loop pauses while it runs.
     const bool on = loopEnabled() && !(recording_ && punchActive_);

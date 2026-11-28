@@ -36,6 +36,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
       host_(host),
       theme_(Theme::load(true)),
       arrange_(session, host, theme_),
+      mixer_(session, theme_),
       keyboard_(session.keyboardState(), juce::KeyboardComponentBase::horizontalKeyboard) {
     theme_.apply(lnf_);
     setLookAndFeel(&lnf_);
@@ -43,8 +44,12 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
 
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
-                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_})
+                    &moreButton_, &quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_,
+                    &mixerButton_})
         addAndMakeVisible(*b);
+    addChildComponent(mixer_);
+    mixerButton_.setTooltip("Show the mixer (X)");
+    mixerButton_.onClick = [this] { toggleMixer(); };
     addTrackButton_.onClick = [this] {
         juce::PopupMenu m;
         addTrackItems(m);
@@ -91,7 +96,7 @@ MainComponent::MainComponent(Session& session, JucePluginHost& host)
     for (auto* b : {&playButton_, &recordButton_, &clickButton_, &countInButton_, &monitorButton_, &keysButton_,
                     &undoButton_, &redoButton_, &newButton_, &openButton_, &saveButton_, &audioButton_, &scanButton_,
                     &moreButton_, &prepareButton_, &compatSummary_, &quantizeButton_, &punchButton_, &timeSigButton_,
-                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_})
+                    &tempoButton_, &rateButton_, &addTrackButton_, &loopButton_, &mixerButton_})
         b->setMouseClickGrabsKeyboardFocus(false);
     // Musical typing: A W S E D F T G Y H U J K = one octave from middle C. Cmd shortcuts, Space
     // (play/stop) and Return (to start) still work while the keyboard has focus.
@@ -172,6 +177,7 @@ void MainComponent::resized() {
     for (auto* b : {&quantizeButton_, &punchButton_, &timeSigButton_, &tempoButton_, &rateButton_, &addTrackButton_})
         b->setVisible(!compact());
     toolbar.push_back(&loopButton_);  // phones too: looping is part of playing
+    toolbar.push_back(&mixerButton_);
     if (!compact()) {
         for (auto* b : {&countInButton_, &monitorButton_, &punchButton_, &quantizeButton_, &timeSigButton_,
                         &tempoButton_, &rateButton_, &addTrackButton_})
@@ -231,6 +237,17 @@ void MainComponent::resized() {
         keyboard_.setBounds(r.removeFromBottom(touch ? 140 : 90));
         r.removeFromBottom(8);
     }
+    if (mixer_.isVisible()) {
+        // Room for both: the mixer docks under the arrangement. Otherwise (phones) it takes over.
+        if (r.getHeight() >= 620 && !compact()) {
+            mixer_.setBounds(r.removeFromBottom(std::min(340, r.getHeight() / 2)));
+            r.removeFromBottom(8);
+        } else {
+            mixer_.setBounds(r);
+            r = r.withHeight(0);
+        }
+    }
+    arrange_.setVisible(r.getHeight() > 0);
     arrange_.setBounds(r);
     arrange_.setLayout(layout_);
 }
@@ -257,6 +274,8 @@ bool MainComponent::keyPressed(const juce::KeyPress& key) {
         key == juce::KeyPress('y', cmd, 0))
         return session_.redo(), true;
     if (key == juce::KeyPress('s', cmd, 0)) return session_.save(), true;
+    if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'x' || key.getTextCharacter() == 'X'))
+        return toggleMixer(), true;
     if (!key.getModifiers().isAnyModifierKeyDown() && (key.getTextCharacter() == 'l' || key.getTextCharacter() == 'L')) {
         session_.setLoopEnabled(!session_.loopEnabled());
         refresh();
@@ -316,6 +335,8 @@ void MainComponent::refresh() {
     undoButton_.setEnabled(session_.canUndo() && !session_.isRecording());
     punchButton_.setToggleState(session_.punchEnabled(), juce::dontSendNotification);
     loopButton_.setToggleState(session_.loopEnabled(), juce::dontSendNotification);
+    mixerButton_.setToggleState(mixer_.isVisible(), juce::dontSendNotification);
+    mixer_.refresh();
     if (session_.hasProject())
         timeSigButton_.setButtonText(juce::String(session_.project().timeSigNumerator) + "/" +
                                      juce::String(session_.project().timeSigDenominator));
@@ -540,6 +561,12 @@ void MainComponent::addTimeSignatureItems(juce::PopupMenu& m) {
                               session_.setTimeSignature(n, d);
                               refresh();
                           });
+}
+
+void MainComponent::toggleMixer() {
+    mixer_.setVisible(!mixer_.isVisible());
+    resized();
+    refresh();
 }
 
 void MainComponent::addLoopItems(juce::PopupMenu& m) {
