@@ -191,6 +191,30 @@ Done so far (built and tested on the Linux dev host only):
     level against 8 fixture files.
   - Surround (5.1/7.1) is folded down to stereo: centre and surrounds at −3 dB, LFE left out.
 
+- **Tempo changes:** song tempo plus tempo changes at any beat (BPM button, ruler markers),
+  one tempo map used by playback, the click, recording, MIDI, editing, stretch and export.
+  Clips stay on their bars; audio keeps its real duration (use time stretch to fit it).
+  Freezes go stale when the tempo map changes. Instant changes only (no ramps yet).
+- **Loop / cycle:** Loop button, L key, Option/Alt-drag in the ruler; sample-accurate wrap
+  (also mid-block), held notes released at the wrap, effect tails kept. Cycle recording:
+  audio keeps every pass as a take (Takes menu), MIDI merges all passes.
+- **Mixer:** strips with fader, pan, mute/solo and post-fader meters (peak hold, clip
+  light), master fader; live changes without engine rebuilds; a drag is one undo step.
+- **Export:** WAV 16 (dithered)/24/32-float, FLAC, Ogg everywhere; M4A (AAC) on Apple and
+  Windows; MP3 on Windows. Whole song with automatic tail, or the loop at exact length;
+  normalize. MP3 on Apple needs an encoder licence decision (LAME is LGPL).
+- **Audio interface:** every input/output opened; inputs chosen by the interface's channel
+  names; per-input meters; main output pair; buffer size with latency; Audio Interface window.
+- **Drums:** Ynot Drums (synthesized kit, GM map) and a step sequencer (B key / Steps):
+  click/paint steps, accents, velocity, swing, 1/8-1/32 and triplet grids, 1-8 bars,
+  audition, Play pattern. Patterns are MIDI clips, so they export and drive any drum plugin.
+- **Ynot Tune:** built-in pitch correction (key, scale, retune speed, humanize, flex-tune,
+  mix) with plugin delay compensation in the engine (sample-exact, tested).
+- Verified for all of the above: core unit tests (101) and app smoke tests on Linux, plus
+  UI checks on a virtual display. Not yet verified by ear or on real interfaces: the drum
+  sounds, Ynot Tune on real vocals, M4A/MP3 encoding on real Macs/PCs, multi-channel
+  interfaces, and buffer/rate changes on hardware.
+
 - **Downloadable Mac app:**
   - The CI-built download (unsigned) first refused to open on macOS 14.3.1 ("not supported"):
     it had no deployment target, so it required the runner's macOS 15. Now built for
